@@ -1388,3 +1388,56 @@ is not on this machine, idalib without analysis gives JUMPOUTs):
   `placed 1, crystal 0`: no crystal objects and no area keys at the time of the refresh, so marking `+0x98 = 0`
   un-places entries that have no crystal to rebuild. Suspect: entries must be re-placed by the spawn path
   (29337b4) or the Lottery, not by the flag alone. Parked with the event raids (user: later).
+
+## ZA Recomp as a reference (2026-11-10; the changed files compiled, the game NOT run)
+
+`../ref/PokeZ-ARecomp-Online` (Pokémon Legends Z-A on a LAS Recomp fork, MIT; same engine family: trpfd, Wwise,
+Lua) compared with nxrecomp area by area. Behaviour only, our own code. gpu.c, kernel.c and main.c compiled with
+the project's flags (both exes; opus and ImGui now from `../deps/vcpkg`); the full build (lifted code) and a run
+are still to do.
+
+Changed in nxrecomp (to try in game):
+- **Glyphs (open item 4)**, gpu.c. Three ways a texture's CPU-written contents stayed blank for good:
+  `image_find`'s container takeover copied the valid sub-images in and then counted as valid, so the layers /
+  levels that were no image of their own stayed zero; `image_get` grown to more mip levels copied the old levels
+  and left the new ones zero; `do_copy_buffer_to_texture` and WriteTexels wrote a region into a never-uploaded
+  image (the rest zeros, then `gpu_written` stops the CPU checks). Now: the container uploads its guest memory
+  and copies in only GPU-written parts; a grown image the GPU never wrote is uploaded whole; partial writes upload
+  first. Z-A's own notes (`runtime/nvn/metal.m` ~562) describe the same symptom ("P ease se e t a i e", the font
+  glyph cache, 1024x2048 R8 linear). Not confirmed as Violet's cause: check text after a long session.
+- **Passes kept over a re-set of the same render targets**, gpu.c OP_RENDER_TARGETS (was: always end the pass,
+  a full barrier and a reload). `NX_SAME_RT=0` turns it off; the 600-frame `gpu:` line counts them ("passes kept").
+  Bench it (bench.ps1, 1x and 2x) against `NX_SAME_RT=0`.
+- **Guest timed waits**: kernel.c `block` took its deadline from GetTickCount64 (15.6 ms steps): a 1-2 ms guest
+  wait lasted up to ~16 ms. Now QPC microseconds. main.c calls `timeBeginPeriod(1)` in every build (netplay builds
+  had it from ENet's init only). Watch for hitches / frame time either way.
+- **Pipeline waits**: `pipeline_get` polled `Sleep(1)` while a worker built a pipeline it needs (a tick each);
+  now a condition variable. Also fixed: a worker that gave the pipeline back (no SPIR-V on disk, P_LISTED) left
+  that loop waiting forever; it now builds it on the render thread.
+
+Not done, ranked (details in the reference; file:line there):
+1. Ignore NVN barriers inside passes with no attachment hazard (their exec.c has no CMD_BARRIER case; full
+   barriers only at real pass starts; draws that sample a bound target copy it first, exec.c ~3858). The bigger
+   version of the same-target change; our two known feedback cases (fs 3614c5d0, 8f2c86b8) need copies first.
+2. Uploads in their own command buffer, deswizzled on worker threads, prefetched at
+   nvnTexturePoolRegisterTexture (textures.c 1262-1334, 1527): the 5-9 ms translation spikes at 2x.
+3. Uniform buffers as UNIFORM_BUFFER_DYNAMIC with the set kept while it matches (exec.c 2416-2453) instead of
+   per-draw push descriptors.
+4. Possible rendering causes: OP_MULTI_DRAW_INDIRECT / OP_DRAW_XFB / OP_DRAW_TEXTURE are skipped (gpu.c, the
+   log line is level 1: count them in rain and on the thought bubble); indirect quads not expanded; depth clamp on
+   in every pass (Z-A only in depth-only / no-depth / square-depth passes: clamp disables near clipping, meshes
+   behind the camera smear as sheets, cf. the glows near the camera); AMD quad lanes from the pixel position,
+   not SubgroupInvocationID & 3 (maxwell/translate.c 407-440).
+5. RomFS mods: `runtime/services/fs.c` 328-813 (mods/<name>/romfs layers, replaced and new files patched into
+   the tables, `data.trpfd` unlisting with FNV-1a 64: field 0 hashes, field 2 infos, as our tools/trinity.py).
+6. Saves through `<file>.pending` + Commit (MoveFileEx REPLACE_EXISTING | WRITE_THROUGH) (fs.c 975-1175): ours
+   write in place and Commit is a no-op; a crash mid-save can corrupt `main`.
+7. libc HLE (memcpy, memset, memcmp, strlen, ...: ~3% of Z-A's CPU); `system_clock::now` checked.
+8. Lifter: store before a call only the registers changed since the last store (dirty tracking; ~1-3% of main);
+   their flagfuse / regpromote gains came from keeping registers in a struct, which we never did.
+9. Older GPUs (open item 6): static vertex input in the pipeline key when EXT_vertex_input_dynamic_state is
+   missing (their device.c 908-933: off on AMD by default, device loss), uint8 indices widened on the CPU always
+   (exec.c 8295), wave64 by a 32-lane emulation prelude in every shader (translate.c 2353-2365) instead of a
+   second pack. Notes for `nxrecomp/docs/GPUS.md`.
+10. Player package: plain-language crash explanations (crash_explain.c), thread priorities / P-cores and
+    EcoQoS opt-out (platform/windows.c 347-369, 816-823), fibers if Violet ever calls nn::os::InitializeFiber.

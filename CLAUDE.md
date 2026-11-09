@@ -84,7 +84,12 @@ edits: `violetrecomp\tools\svedit` (.NET 9 + PKHeX.Core; back up `build\save` fi
    a day reroll. Parked (the user: later); forcing the reroll is the next step.
    **In progress: event raids** (past, custom, and a friend's homebrewed Switch save). Start from NOTES.md, the section
    "Event raids from online" (delivery file names, save blocks, both routes, what is waiting).
-4. The two F12 captures of 2026-11-06 (missing letters, rain).
+4. The two F12 captures of 2026-11-06 (missing letters, rain). **2026-11-10, compiled, not yet run:** nxrecomp
+   fixes from the ZA Recomp comparison (blank texture parts after a container takeover / mip growth / partial
+   copy: a likely cause of the missing letters; passes kept over a re-set of the same targets, `NX_SAME_RT=0` off;
+   guest waits on QPC with 1 ms timer resolution; pipeline waits without Sleep(1)). Build, check text and
+   bench. NOTES.md, "ZA Recomp as a reference", has these and the
+   ranked list of what else to take.
 5. Performance: NOTES.md, "Next (written 2026-10-22 ...)".
 6. Older GPUs (a tester's RX 580 lacks `EXT_vertex_input_dynamic_state` and `KHR_index_type_uint8`, and GCN has no
    32-wide waves): the plan is in `nxrecomp/docs/GPUS.md`, not started (the user: a friend may take it).
