@@ -1360,7 +1360,7 @@ Routes (the user's choices so far):
 Not wanted: fetching from Nintendo's servers. Downloading community archives of past event files: ask first.
 Multiplayer: joiners should get the boss from the host (unconfirmed), so only the host needs the event.
 
-## Raid crystals rebuilt on demand (2026-11-07; built, NOT yet tried in game)
+## Raid crystals rebuilt on demand (2026-11-07; redone 2026-11-09, see the end of the section)
 
 User report: seeds written with F6 showed only after a restart (since at least 2026-11-06; not from the mod
 split). The game's refresh path, found with Ghidra (7 s a batch on build/analysis/ghidra; the IDA database for main
@@ -1388,6 +1388,96 @@ is not on this machine, idalib without analysis gives JUMPOUTs):
   `placed 1, crystal 0`: no crystal objects and no area keys at the time of the refresh, so marking `+0x98 = 0`
   un-places entries that have no crystal to rebuild. Suspect: entries must be re-placed by the spawn path
   (29337b4) or the Lottery, not by the flag alone. Parked with the event raids (user: later).
+
+- **2026-11-09: why they vanished, and the rebuild redone (built; the user tries it).** Ghidra again
+  (`build/ghidra_gem1..5.txt`). The "recipe" (entry+0x98 = 0, crystal+0xd1 = 1) is the game's way to REMOVE a den:
+  the update 2933374 drops a crystal once its own update (2936d94) says it is gone, then erases every entry with
+  +0x98 = 0 and no crystal from its vector. Nothing puts an entry back, so marking all of them emptied the world.
+  - Groups: 0 = the player's own dens, 1-3 = the other players' of a session (29337b4 registers a player's 300 x
+    6-byte list, 29341d8 drops one, the new-day handler 01ea82c0 drops all three). M+0x2d is that list of our own
+    dens for the others (the code after the update's assert, a function of its own, fills it from the placed
+    group-0 entries): not a cache, resetting it did nothing useful. The reset button is gone.
+  - The entries are made by **e23ec8(M, force)** (in the manager's method table at file offset 3a65428 of
+    main.elf, with the update, 01ea82c0, 29337b4, ...; no direct callers): it bumps the generation M+0x7d8 (part
+    of the crystal objects' names); without force, with M+0x1661 clear and a save that has dens (e2913c: the save's
+    current seed != 0), it walks the save object's 3 x 100 dens (0x20 bytes each: +0x50, +0xcd8, +0x1958 for
+    Paldea / Kitakami / Blueberry; area, group, point, u64 seed, content, claimed), finds the spawn point
+    (e25b3c) and adds the entry with the raid picked from the seed (e26fec(M, point, rng, seed, event index, 0);
+    its last argument 1 also writes the den to the save: the reroll's calls). Otherwise it resets the dens
+    (e29340) and rerolls. An entry keeps its raid (+0x20..+0x68), which is why a written seed needed a restart.
+  - raidgem.c now: mark the group-0 entries the game's way, wait until the update has erased them (the next
+    update when none has a crystal; up to 300 updates for crystals to go), `guest_call` e23ec8(M, 0), set
+    M+0x1662 (Reflection). Refused when M+0x1661 is set (a reroll would replace the written seeds). `raidgem:`
+    lines in run.log: marked count, entries placed, the first entries after.
+  - Not known: what the Reflection / Lottery events' receiver (M+8) does, and where the crystal object (+0x70)
+    is made. If the crystals still do not show after "dens placed again", look there next (the entry count in the
+    log says whether the placing worked).
+  - This machine's build tree was still configured from the game's own folder: build.bat configured it again, and
+    SDL3 was not found (vcenv replaces VCPKG_ROOT with Visual Studio's; the libraries are in the machine's own
+    vcpkg tree). Configured once with `-DNX_SDL3_INCLUDE/_LIB/_DLL` pointing there (cache only).
+
+- 2026-11-09, F6 list: unused slots (all zero) listed as a raid of their own (seed 0: 5-star Hatterene, Dragon);
+  now hidden and not written to (`den_unused`). Compiled; the DLL links once the game is closed.
+- 2026-11-09, asked: **is a raid on the user's real Switch shiny?** (its save cannot be dumped: no homebrew.) The
+  den list a player sends the others (the 6 bytes: area, group, point, entry+0x40 (0-17, read as the Tera type),
+  black / event bits, region) has no seed, and 29337b4 makes the other players' entries with a zero seed. So the
+  boss must arrive later (at the crystal or in the raid lobby). Not researched: where that data lands in our
+  instance when it looks at / joins a raid the Switch hosts through ../ldn-beacon, and whether it holds the seed
+  (then shiny follows as in raids.cpp) or the finished Pokemon. Next step: a session with the Switch, logging.
+
+- 2026-11-09, the user's run with the redone rebuild (run.log): `119 own dens marked for removal (2 with a
+  crystal)`, then `dens placed again from the save after 32 update(s): 119 own entries`. So the placing works and
+  the two crystals took 32 updates to go. Whether the crystals came back on screen: not said yet.
+- 2026-11-09, the user: **raids in a Union Circle are separate per player**; another player's raid is only seen
+  by joining it from the menu while they search for players. So groups 1-3 and the 300 x 6-byte list above are NOT
+  "the other players' dens shown in my world" as read from the code (what they are is open), and a shiny check of
+  the Switch's raids can only come from the lobby data, one raid at a time (what it carries: not researched).
+- 2026-11-09, **F8 "Spawn <species> on me" crashed** (user; DevID 6 Charizard, shiny, 3 m): the chunk returned
+  "Spawned a group of 4 ... (4 made as the chosen species)", wild.c changed four creates, then svcBreak from
+  nn::diag Abort out of main+b5d930 on the main thread's regular update. That is the Haxe-Lua invoker (gflib3
+  haxe_lua/invoker.h, CallImpl, main+b5d450): a pcall of a script method failed and it asserts with the error text
+  (also stored at [main+46d4238]). Our log had no text, so **patches.txt main+b5d8fc `after script_error`** (lua.c)
+  now logs class.method and the Lua error before the abort (`lua: the game's own script call failed`). Cause not
+  known yet; first suspect: Charizard is not a wild species in this game (raids only), so its field mon lacks
+  something the per-frame script expects. Next: reproduce once, read that line; try a species that is wild in the
+  area too.
+
+- 2026-11-09, **the spawn crash found** (second run, Pikachu, a wild species: same abort; the Charizard guess was
+  wrong). The new log line: `C3B091777E3EC94A5.SE94F3E13286232CF: method 'FCEEA7F4134055567' is not callable (a nil
+  value)`. spawn_on_me's chunk ended with `T.FCEEA7F4134055567 = nil` to drop its one-call override of the
+  encounter table's picker, assuming the real one sits in a metatable behind the instance. It does not: the table
+  W[26] holds the method itself, so nil removed the picker and the game's next own spawn failed. Now the chunk
+  keeps the picker (`pick0`) and puts it back. Built; the user tries it. (Other wraps in mons.cpp already keep the
+  original: `__nx_orig`, `__nx_f2`.)
+
+- 2026-11-09, F8 (asked: a switch for all-shiny spawns, and the window tidied). Compiled; the link waits for the
+  game to be closed; not tried.
+  - **All spawns shiny**: wild.c export `violet_all_shiny(on)`; h_wild_create turns a spec whose shiny mode is 3
+    (rolled) into 2 (always), for every species. Not only wild mons: any create that rolls. Unchecked that the wild
+    spawner's specs are mode 3 (the header says so); `wild: all shiny: first rolled create made shiny` in run.log
+    confirms it, its absence after new spawns means another mode (then NX_WILD_LOG=1 shows which).
+  - The window is three tabs under the species picker: **Pokemon** (the build, "Spawn into the boxes", scan),
+    **Wild spawns** (All spawns shiny, No contact battles, "Turn spawns into <species>"), **Around you** (spawn on
+    the player, the area's list and weights). The level / shiny / stats options for a spawned species are one set
+    (`spawn_opts`), shown in both of the last two.
+
+- 2026-11-09, F6 reworked (asked: clearer section names, what the areas are, coordinates and something in game
+  that shows where they are, columns sized to content, sorting). Compiled; links once the game is closed; not tried.
+  - **Den entry layout confirmed in a live game** (read-only ReadProcessMemory on the running exe, manager from
+    run.log): +0x20 float x, y, z (the den's position), +0x44 area (= the vector's index: the 23 vectors are the
+    area numbers, all three regions mixed), +0x48 group, +0x4c point, +0x64 region (0 / 1 / 2), +0x40 a value
+    0-17 (unnamed; the Tera type?). North is -z, east +x.
+  - raidgem.c copies the own placed dens every 30 updates; export `violet_raid_points(out, max)` ({region, area,
+    group, point, x, y, z, crystal}). The mod matches them to the save's dens by region / area / group / point.
+  - The player's position: the wild manager's `K.SBF5E0EFFB821427F:f7360ED03()` through run_script twice a second
+    while F6 is open. A chunk starting `--quiet` is not logged on success (lua.c).
+  - Area names: `build/mods/raid_areas.txt` from raiddata.py (place_name.dat lines; Paldea = line 2 * area + 4,
+    which is the file's own order; **Kitakami / Blueberry numbers are from memory of the community tools' lists,
+    unchecked**: compare a few with the map).
+  - The list: Den, Active, Area, From you (metres + compass), Position, Stars, Pokemon, Tera, Shiny, Seed; click a
+    header to sort, columns fit their content, resizable / reorderable / hideable. "You are at x, y, z" above it.
+    Sections: "Your dens today", "Den N: set by seed", "Put a chosen Pokemon in a den"; "Reload crystals in the
+    world"; one "Writing a den also makes it active again" switch for both ways of writing.
 
 ## ZA Recomp as a reference (2026-11-10; the changed files compiled, the game NOT run)
 

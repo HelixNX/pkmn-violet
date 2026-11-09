@@ -112,9 +112,21 @@ void h_lua_pcall_entry(Ctx *c) {
             ok = false;
             snprintf(out, sizeof out, "gave up: the chunk asked to be run again %d times", j->tries);
         }
-        hlog(ok ? 1 : 0, "lua: %s: %s", ok ? "ok" : "error", out);
+        if (!ok || strncmp(j->text, "--quiet", 7))  /* a chunk that polls (the raids mod's position) says so */
+            hlog(ok ? 1 : 0, "lua: %s: %s", ok ? "ok" : "error", out);
         if (j->done) j->done(j->ud, ok, out);
         free(j->text);
     }
     busy = 0;
+}
+
+/* main+b5d8fc (mov x7, x0): the Haxe-Lua invoker (gflib3 haxe_lua/invoker.h, CallImpl) after a failed pcall of a
+ * script method, x0 the error text, x23 / [x29-8] the class and method names it looked up (obfuscated). The game
+ * aborts next (svcBreak with no text in our log), so say here what the script objected to. */
+void h_script_error(Ctx *c) {
+    const char *msg = (const char *)(uintptr_t)c->x[0];
+    const char *cls = (const char *)(uintptr_t)c->x[23];
+    const char *fn = (const char *)(uintptr_t)*(u64 *)(uintptr_t)(c->x[29] - 8);
+    hlog(0, "lua: the game's own script call failed (it aborts now): %s.%s: %s", cls ? cls : "(global)", fn ? fn : "?",
+         msg ? msg : "(no message)");
 }

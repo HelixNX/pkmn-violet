@@ -31,3 +31,6 @@ main+1d0e5e4 was 2a0103f3 after encount_enable       # mov w19, w1: the enable b
 #
 # Tera raid crystals rebuilt on demand (raidgem.c, the raids mod's F6): the crystal manager's per-frame update.
 main+2933398 was aa0003f3 after raidgem_update       # mov x19, x0: the manager
+#
+# A failed script call named in the log before the game aborts (lua.c): the invoker's CallImpl, after lua_tolstring.
+main+b5d8fc  was aa0003e7 after script_error         # mov x7, x0: the error text

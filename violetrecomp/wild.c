@@ -57,6 +57,16 @@ static __declspec(thread) int post_pending;     /* this thread's create was chan
 static __declspec(thread) VioletWild post;
 static __declspec(thread) int busy;
 
+/* "All spawns shiny" (the mons mod's F8): every create whose spec leaves shininess to the roll (mode 3) is made
+ * shiny. That is the wild spawner's, and any other maker that rolls; fixed specs (never / always) stay. */
+static volatile LONG all_shiny, all_shiny_seen;
+
+__declspec(dllexport) void violet_all_shiny(int on) {
+    InterlockedExchange(&all_shiny, on ? 1 : 0);
+    InterlockedExchange(&all_shiny_seen, 0);
+    hlog(0, "wild: all spawns shiny %s", on ? "on" : "off");
+}
+
 /* NULL: off */
 __declspec(dllexport) void violet_wild_set(const VioletWild *w) {
     AcquireSRWLockExclusive(&lock);
@@ -93,6 +103,10 @@ void h_wild_create(Ctx *c) {
              *(u16 *)(s + 0x2a), *(u16 *)(s + 0x2e), *(u32 *)(s + 0x1c), ch);
     }
     post_pending = 0;
+    if (all_shiny && s && *(u32 *)(s + 0x1c) == 3) {           /* rolled: always */
+        *(u64 *)(s + 0x18) = (u64)2 << 32 | 0xffffffffu;
+        if (!InterlockedExchange(&all_shiny_seen, 1)) hlog(0, "wild: all shiny: first rolled create made shiny (DevID %u)", *(u16 *)(s + 0x28));
+    }
     if (!active || !s) return;
     VioletWild w;
     AcquireSRWLockShared(&lock);

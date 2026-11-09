@@ -24,6 +24,9 @@ natures, types), each u32 count then {u16 length, UTF-8}; u32 count of raid entr
   u16 abilities[3]; u16 moves[4]; u16 DevID, 0
 in each table's order (the rate roll walks them in order).
 
+<build>/mods/raid_areas.txt: "<region> <area> <name>" a line, the dens' area numbers named from place_name.dat
+(AREA_LINES below: which line names which area).
+
 Usage (inside violetrecomp): python mods/raids/raiddata.py
 """
 import os
@@ -42,6 +45,16 @@ PKHEX_TOTALS = {
     'Paldea': {1: (5800,) * 2, 2: (5300,) * 2, 3: (7400,) * 2, 4: (8800, 8700), 5: (9100,) * 2, 6: (6500,) * 2},
     'Kitakami': {1: (1500,) * 2, 2: (1500,) * 2, 3: (2500,) * 2, 4: (2100,) * 2, 5: (2250,) * 2, 6: (2475, 2574)},
     'Blueberry': {1: (1100,) * 2, 2: (1100,) * 2, 3: (2000,) * 2, 4: (1900,) * 2, 5: (2100,) * 2, 6: (2600,) * 2},
+}
+
+
+# A den's area number -> its line in place_name.dat. Paldea's areas follow the file's order (line 2 * area + 4:
+# 1 South Province (Area One), 4 (Area Two), ... 22 North Province (Area Two)). The DLC areas' order is as the
+# community's raid tools list them (not checked against the game: a wrong name here is only a label).
+AREA_LINES = {
+    0: {a: 2 * a + 4 for a in range(1, 23)},
+    1: {1: 132, 2: 136, 3: 140, 4: 144, 5: 168, 6: 152, 7: 156, 8: 158, 9: 160, 10: 162, 11: 164},
+    2: {1: 174, 2: 176, 3: 178, 4: 180, 5: 174, 6: 176, 7: 178, 8: 180},
 }
 
 
@@ -139,6 +152,12 @@ def main():
                 '' if tuple(tot) == want else '  (PKHeX: %d / %d)' % want))
     out = os.path.join(gamecfg.BUILD, 'mods')
     os.makedirs(out, exist_ok=True)
+    places = messages(t, 'place_name')
+    with open(os.path.join(out, 'raid_areas.txt'), 'w', encoding='utf-8') as f:
+        for region, lines in AREA_LINES.items():
+            for area, line in sorted(lines.items()):
+                if line < len(places) and places[line]:
+                    f.write('%d %d %s\n' % (region, area, places[line]))
     path = os.path.join(out, 'raids.dat')
     with open(path, 'wb') as f:
         f.write(b'NXRD' + struct.pack('<I', 1))

@@ -845,9 +845,11 @@ bool spawn_on_me(float dist, int pick_dev = -1, int pick_form = 0, int swap_dev 
            "info.pos = {x + dist * math.cos(a), y, z + dist * math.sin(a)}\n"
            "local T = W[26]\n"
            "local found = false\n"
+           "local pick0 = T.FCEEA7F4134055567\n"    /* put back after: the table holds its picker itself, so nil
+                                                        removed it for good (the next spawn aborted the game) */
            "if pdev >= 0 then\n"
            "  T.FCEEA7F4134055567 = function(self, inf, rng, ctx, flag)\n"
-           "    T.FCEEA7F4134055567 = nil\n"
+           "    T.FCEEA7F4134055567 = pick0\n"
            "    local list, wts = newarr(), newarr()\n"
            "    local f = T.__nx_f2 or T.F2F6C7BBE115AFBCB\n"
            "    f(T, inf, ctx, flag, list, wts)\n"
@@ -855,7 +857,7 @@ bool spawn_on_me(float dist, int pick_dev = -1, int pick_form = 0, int swap_dev 
            "      local e = list[i]\n"
            "      if get(e, 'f2BF366A2') == pdev and get(e, 'fE15E9D0A') == pform then found = true; return e end\n"
            "    end\n"
-           "    return T:FCEEA7F4134055567(inf, rng, ctx, flag)\n"
+           "    return pick0(T, inf, rng, ctx, flag)\n"
            "  end\n"
            "end\n"
            "local C = C2B428A63695FD2C7\n"
@@ -869,7 +871,7 @@ bool spawn_on_me(float dist, int pick_dev = -1, int pick_form = 0, int swap_dev 
            "  end\n"
            "end\n"
            "local ok, made = pcall(W.F61D1ABB7697071EB, W, info)\n"
-           "T.FCEEA7F4134055567 = nil\n"
+           "T.FCEEA7F4134055567 = pick0\n"
            "if sdev >= 0 and maker then C.S988D7D0A4EEF693D = maker end\n"
            "if not ok then g.bosses:resize(0); g.minions:resize(0); return 'error|the group maker failed: ' .. tostring(made) end\n"
            "if not made then g.bosses:resize(0); g.minions:resize(0); return 'error|the game refused this spot (no ground under the player, or no entry allowed here); try again or step aside' end\n"
@@ -925,6 +927,13 @@ bool weights_apply(bool clear) {
 typedef void (*NoBattles)(int);
 NoBattles no_battles_fn() {
     static NoBattles f = (NoBattles)(void *)GetProcAddress(GetModuleHandleW(nullptr), "violet_no_battles");
+    return f;
+}
+
+/* wild.c in the exe: every create whose shininess is rolled comes out shiny */
+typedef void (*AllShiny)(int);
+AllShiny all_shiny_fn() {
+    static AllShiny f = (AllShiny)(void *)GetProcAddress(GetModuleHandleW(nullptr), "violet_all_shiny");
     return f;
 }
 
@@ -997,35 +1006,24 @@ void mons_toggle() {
     if (g_open && g_error.empty()) scan_start();    /* every time it opens: the boxes move between loads */
 }
 
-void mons_ui() {
-    if (!g_open) return;
-    ImGui::SetNextWindowSize(ImVec2(640, 700), ImGuiCond_FirstUseEver);
-    bool open = true;
-    if (!ImGui::Begin("Spawn a Pokemon", &open)) { ImGui::End(); if (!open) g_open = false; return; }
-    if (!open) g_open = false;
-    if (!g_error.empty()) { ImGui::TextWrapped("%s", g_error.c_str()); ImGui::End(); return; }
+/* shared by "Wild spawns" and "Spawn <species>" (Around you): how a spawned mon of the chosen species is made */
+static int lv_mode = 0, shiny_mode = 2;
+static bool all = true;
 
-    if (g_scanning) ImGui::ProgressBar((float)((double)g_done / (double)g_total), ImVec2(240, 0), "scanning memory");
-    else if (ImGui::Button("Scan memory for the boxes")) scan_start();
+static void spawn_opts(const char *id) {
+    ImGui::PushID(id);
+    ImGui::RadioButton("Area's level", &lv_mode, 0);
     ImGui::SameLine();
-    {
-        std::lock_guard<std::mutex> l(g_lock);
-        ImGui::TextUnformatted(g_scan_msg.empty() ? "Load a save, then scan." : g_scan_msg.c_str());
-    }
+    ImGui::RadioButton("Level from Pokemon tab", &lv_mode, 1);
+    ImGui::SetNextItemWidth(140);
+    ImGui::Combo("Shiny", &shiny_mode, "As rolled\0Never\0Always\0");
+    ImGui::SameLine();
+    ImGui::Checkbox("Stats from Pokemon tab", &all);
+    ImGui::PopID();
+}
 
-    Spec &p = g_spec;
-    const Species *s = p.species >= 0 ? &g_species[p.species] : nullptr;
-    ImGui::SetNextItemWidth(320);
-    if (fc_species.begin("Species", s ? s->label.c_str() : "(pick one)")) {
-        for (int i = 0; i < (int)g_species.size(); i++)
-            if (fc_species.item(g_species[i].label.c_str(), i == p.species)) {
-                p.species = i;
-                p.ability_slot = 0;
-                p.tera = -1;
-            }
-        fc_species.end();
-    }
-    if (!s) { ImGui::End(); return; }
+/* tab "Pokemon": the mon as built (the boxes get it as it is; wild spawns take its stats) */
+static void ui_build(Spec &p, const Species *s) {
     ImGui::SetNextItemWidth(120);
     ImGui::InputInt("Level", &p.level);
     p.level = p.level < 1 ? 1 : p.level > 100 ? 100 : p.level;
@@ -1124,21 +1122,54 @@ void mons_ui() {
         if (k % 2 == 0) ImGui::SameLine();
     }
 
-    static int lv_mode = 0, shiny_mode = 2;   /* shared by the wild spawns and "Spawn <species> on me" */
-    static bool all = true;
-    ImGui::SeparatorText("Wild spawns");
+    ImGui::SeparatorText("Boxes");
+    if (ImGui::Button("Spawn into the boxes")) {
+        std::string msg;
+        spawn(p, msg);
+        set_status(msg);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(first free box slot)");
+    {
+        std::lock_guard<std::mutex> l(g_status_lock);
+        if (!g_status.empty()) ImGui::TextWrapped("%s", g_status.c_str());
+    }
+    ImGui::SameLine();
+    if (g_scanning) ImGui::ProgressBar((float)((double)g_done / (double)g_total), ImVec2(240, 0), "scanning memory");
+    else if (ImGui::Button("Scan again")) scan_start();
+    ImGui::SameLine();
+    {
+        std::lock_guard<std::mutex> l(g_lock);
+        ImGui::TextUnformatted(g_scan_msg.empty() ? "Load a save, then scan." : g_scan_msg.c_str());
+    }
+
+}
+
+/* tab "Wild spawns": what the game spawns by itself from now on */
+static void ui_wild(Spec &p, const Species *s) {
+    static bool all_shiny = false;
+    if (ImGui::Checkbox("All spawns shiny", &all_shiny)) {
+        std::lock_guard<std::mutex> l(g_status_lock);
+        if (AllShiny f = all_shiny_fn()) {
+            f(all_shiny ? 1 : 0);
+            g_wild_status = all_shiny ? "Every new spawn is shiny. Walk to fresh ground." : "Shiny odds back to normal (new spawns).";
+        } else g_wild_status = "No shiny hook in this build.";
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Every Pokemon whose shininess the game rolls: wild spawns, and others made the same way.");
+    ImGui::SameLine();
+    static bool no_battles = false;
+    if (ImGui::Checkbox("No contact battles (dev)", &no_battles)) {
+        if (NoBattles f = no_battles_fn()) f(no_battles ? 1 : 0);
+        else field_status("No battle hook in this build.");
+    }
+
+    ImGui::SeparatorText(("Turn spawns into " + s->name).c_str());
     {
         static int pct = 100;
-        ImGui::RadioButton("Level: the area's", &lv_mode, 0);
-        ImGui::SameLine();
-        ImGui::RadioButton("the level above", &lv_mode, 1);
-        ImGui::SetNextItemWidth(140);
-        ImGui::Combo("Shiny##wild", &shiny_mode, "As rolled\0Never\0Always\0");
-        ImGui::SameLine();
-        ImGui::Checkbox("Use the stats above", &all);
+        spawn_opts("wild");
         ImGui::SetNextItemWidth(200);
-        ImGui::SliderInt("of wild spawns", &pct, 0, 100, "%d%%");
-        if (ImGui::Button("Apply to wild spawns")) {
+        ImGui::SliderInt("of spawns", &pct, 0, 100, "%d%%");
+        if (ImGui::Button("Apply")) {
             bool spec = wild_spec_apply(p, lv_mode ? p.level : 0, shiny_mode, all, pct);
             bool lua = wild_lua(s->internal, s->form, lv_mode ? p.level : 0, pct);
             std::string msg = !spec ? "No wild spawn hook in this build (violet_wild_set missing from the exe)."
@@ -1168,15 +1199,18 @@ void mons_ui() {
         if (!g_wild_status.empty()) ImGui::TextWrapped("%s", g_wild_status.c_str());
     }
 
-    ImGui::SeparatorText("Around you");
+}
+
+/* tab "Around you": spawn on the player, the area's spawn list and weights */
+static void ui_around(Spec &p, const Species *s) {
     {
         static float dist = 3.0f;
-        if (ImGui::Button("List spawns")) {
+        if (ImGui::Button("List the area's spawns")) {
             if (!area_list()) field_status("No Lua bridge in this build.");
             else field_status("Listing...");
         }
         ImGui::SameLine();
-        if (ImGui::Button("Spawn here")) {
+        if (ImGui::Button("Spawn the area's pick")) {
             if (!spawn_on_me(dist)) field_status("No Lua bridge in this build.");
         }
         ImGui::SameLine();
@@ -1189,15 +1223,11 @@ void mons_ui() {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(140);
         ImGui::SliderFloat("Distance", &dist, 0.0f, 15.0f, "%.1f m");
-        static bool no_battles = false;
-        if (ImGui::Checkbox("No contact battles (dev)", &no_battles)) {
-            if (NoBattles f = no_battles_fn()) f(no_battles ? 1 : 0);
-            else field_status("No battle hook in this build.");
+        if (dist < 2.0f) ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "Under 2 m may start a battle.");
+        if (ImGui::TreeNode(("How \"Spawn " + s->name + "\" makes it").c_str())) {
+            spawn_opts("around");
+            ImGui::TreePop();
         }
-        ImGui::SameLine();
-        ImGui::TextDisabled("(new spawns)");
-        if (dist < 2.0f && !no_battles)
-            ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "Under 2 m may start a battle.");
 
         std::lock_guard<std::mutex> l(g_area_lock);
         if (g_area.ok) {
@@ -1258,17 +1288,34 @@ void mons_ui() {
         if (!g_field_status.empty()) ImGui::TextWrapped("%s", g_field_status.c_str());
     }
 
-    ImGui::Separator();
-    if (ImGui::Button("Spawn into the boxes")) {
-        std::string msg;
-        spawn(p, msg);
-        set_status(msg);
+}
+
+void mons_ui() {
+    if (!g_open) return;
+    ImGui::SetNextWindowSize(ImVec2(640, 700), ImGuiCond_FirstUseEver);
+    bool open = true;
+    if (!ImGui::Begin("Spawn a Pokemon", &open)) { ImGui::End(); if (!open) g_open = false; return; }
+    if (!open) g_open = false;
+    if (!g_error.empty()) { ImGui::TextWrapped("%s", g_error.c_str()); ImGui::End(); return; }
+
+    Spec &p = g_spec;
+    const Species *s = p.species >= 0 ? &g_species[p.species] : nullptr;
+    ImGui::SetNextItemWidth(320);
+    if (fc_species.begin("Species", s ? s->label.c_str() : "(pick one)")) {
+        for (int i = 0; i < (int)g_species.size(); i++)
+            if (fc_species.item(g_species[i].label.c_str(), i == p.species)) {
+                p.species = i;
+                p.ability_slot = 0;
+                p.tera = -1;
+            }
+        fc_species.end();
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("(first free box slot)");
-    {
-        std::lock_guard<std::mutex> l(g_status_lock);
-        if (!g_status.empty()) ImGui::TextWrapped("%s", g_status.c_str());
+    if (!s) { ImGui::End(); return; }
+    if (ImGui::BeginTabBar("##tabs")) {
+        if (ImGui::BeginTabItem("Pokemon")) { ui_build(p, s); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Wild spawns")) { ui_wild(p, s); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Around you")) { ui_around(p, s); ImGui::EndTabItem(); }
+        ImGui::EndTabBar();
     }
     ImGui::End();
 }

@@ -18,14 +18,15 @@
  * types). The tables come from the game's files (raiddata.py -> <build>\mods\raids.dat).
  *
  * The finder searches seeds for a species (and shiny / Tera type) and writes them into dens. After a write the
- * world's crystals are rebuilt through the exe's export violet_raid_refresh (raidgem.c: the game's own per-crystal
- * refresh, for every crystal; without it a written seed showed only after a restart). The item giver and the mon spawner are mods of their own
+ * world's crystals are rebuilt through the exe's export violet_raid_refresh (raidgem.c: the own dens removed and
+ * placed again from the save by the game's own code; without it a written seed showed only after a restart). The item giver and the mon spawner are mods of their own
  * (mods/items, mods/mons). */
 #include "filtercombo.h"
 #include "modkit.h"
 #include <algorithm>
 #include <atomic>
 #include <ctype.h>
+#include <math.h>
 #include <mutex>
 #include <stdint.h>
 #include <stdio.h>
@@ -107,6 +108,24 @@ static void load_data(const char *cache_dir) {
     for (u32 i = 0; i < n; i++)
         if (D.raids[i].region < N_REGIONS && D.raids[i].stars <= 6) D.table[D.raids[i].region][D.raids[i].stars].push_back(i);
     D.loaded = true;
+}
+
+/* the dens' area names, "<region> <area> <name>" a line (raiddata.py; without the file the list shows numbers) */
+static std::string g_area_names[N_REGIONS][32];
+
+static void load_areas(const char *cache_dir) {
+    char path[MAX_PATH + 32], line[256];
+    snprintf(path, sizeof path, "%s\\mods\\raid_areas.txt", cache_dir);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        int r, a, at = 0;
+        if (sscanf(line, "%d %d %n", &r, &a, &at) < 2 || r < 0 || r >= N_REGIONS || a < 0 || a >= 32 || !at) continue;
+        std::string n = line + at;
+        while (!n.empty() && (n.back() == '\n' || n.back() == '\r')) n.pop_back();
+        g_area_names[r][a] = n;
+    }
+    fclose(f);
 }
 
 /* ---------------------------------------------------------------------------------------------- the raid RNG */
@@ -223,6 +242,9 @@ static Result generate(u32 seed, int region, u32 content, int progress) {
 /* ---------------------------------------------------------------------------------------------- dens in memory */
 struct Den { u32 enabled, area, group, point, seed, unused, content, claimed; };
 static_assert(sizeof(Den) == 0x20, "den");
+
+/* a slot the game has no den in (all zero: Paldea had 69 dens of 72 early in the story) */
+static bool den_unused(const Den &d) { return !d.area && !d.seed; }
 
 static bool den_shape(const u32 *w) {
     return w[0] <= 1 && w[1] >= 1 && w[1] <= 64 && w[2] < 256 && w[3] < 4096 && w[5] == 0 && w[6] <= 3 && w[7] <= 1;
@@ -427,12 +449,64 @@ static Den g_dens[100];
 static bool g_have_dens;
 static std::string g_status;
 
-/* raidgem.c in the exe: 1 rebuild the crystals, 2 also reset the game's per-den state; returns the manager (0: none
- * seen yet), or -1 when the exe has no such export */
+/* raidgem.c in the exe: non-zero rebuilds the crystals from the dens; returns the manager (0: none seen yet), or -1
+ * when the exe has no such export */
 static long long refresh_crystals(int what) {
     typedef unsigned long long (*Refresh)(int);
     static Refresh f = (Refresh)(void *)GetProcAddress(GetModuleHandleW(nullptr), "violet_raid_refresh");
     return f ? (long long)f(what) : -1;
+}
+
+/* Where the dens are (raidgem.c's copy of the game's own den entries) and where the player is (the wild manager's
+ * player position through the Lua bridge, asked twice a second while the window is open; "--quiet": not logged). */
+struct RaidPoint { u32 region, area, group, point; float x, y, z; u32 crystal; };
+static RaidPoint g_points[320];
+static int g_npoints;
+static std::mutex g_me_lock;
+static float g_me[3];
+static bool g_have_me;
+static std::atomic<bool> g_me_asked;
+
+static void me_done(void *, bool ok, const char *r) {
+    float x, y, z;
+    std::lock_guard<std::mutex> l(g_me_lock);
+    g_have_me = ok && sscanf(r, "%f|%f|%f", &x, &y, &z) == 3;
+    if (g_have_me) { g_me[0] = x; g_me[1] = y; g_me[2] = z; }
+    g_me_asked = false;
+}
+
+static void where_update() {
+    typedef int (*Points)(RaidPoint *, int);
+    static Points pf = (Points)(void *)GetProcAddress(GetModuleHandleW(nullptr), "violet_raid_points");
+    static ULONGLONG last;
+    ULONGLONG now = GetTickCount64();
+    if (now - last < 500) return;
+    last = now;
+    g_npoints = pf ? pf(g_points, 320) : 0;
+    const NxModHost *h = modkit::host();
+    if (h->version < 3 || !h->run_script || g_me_asked.exchange(true)) return;
+    if (!h->run_script("--quiet\n"
+                       "local K = C4EE52E49562F8277\n"
+                       "if K == nil or K.SBF5E0EFFB821427F == nil then return 'none' end\n"
+                       "local x, y, z = K.SBF5E0EFFB821427F:f7360ED03()\n"
+                       "return string.format('%.1f|%.1f|%.1f', x, y, z)\n", me_done, nullptr))
+        g_me_asked = false;
+}
+
+static const RaidPoint *point_of(int region, const Den &d) {
+    for (int i = 0; i < g_npoints; i++) {
+        const RaidPoint &p = g_points[i];
+        if ((int)p.region == region && p.area == d.area && p.group == d.group && p.point == d.point) return &p;
+    }
+    return nullptr;
+}
+
+/* north is -z, east +x (dens of South Province (Area One) sit at high z, Glaseado's at low z) */
+static const char *compass(float dx, float dz) {
+    static const char *const names[8] = {"E", "NE", "N", "NW", "W", "SW", "S", "SE"};
+    double a = atan2(-(double)dz, (double)dx) * 180.0 / 3.14159265358979;
+    if (a < 0) a += 360;
+    return names[(int)((a + 22.5) / 45.0) % 8];
 }
 
 static const char *refresh_note(long long r) {
@@ -467,81 +541,158 @@ static void ui() {
         std::lock_guard<std::mutex> l(g_blocks_lock);
         ImGui::TextUnformatted(g_scan_msg.empty() ? "Load a save, then scan." : g_scan_msg.c_str());
     }
-    ImGui::SetNextItemWidth(280);
-    ImGui::Combo("Story progress", &g_progress, progress_names, 5);
+    ImGui::SeparatorText("Your dens today");
     for (int r = 0; r < N_REGIONS; r++) {
         if (r) ImGui::SameLine();
         if (ImGui::RadioButton(region_names[r], g_region == r)) { g_region = r; g_sel = 0; }
     }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(240);
+    ImGui::Combo("Story progress", &g_progress, progress_names, 5);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Decides the star levels a den can roll. Set it to your save's, or the list shows the wrong raids.");
 
     g_have_dens = read_dens(g_region, g_dens);
     u32 nd = region_dens[g_region];
     if (!g_have_dens) ImGui::TextDisabled("No %s dens found: scan again after loading.", region_names[g_region]);
-    if (ImGui::Button("Rebuild crystals")) g_status = std::string("Rebuild asked.") + refresh_note(refresh_crystals(1));
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rebuilds the raid crystals in the world from the dens as they are now (no reroll).");
-    ImGui::SameLine();
-    if (ImGui::Button("Rebuild + reset den state")) g_status = std::string("Rebuild and reset asked.") + refresh_note(refresh_crystals(2));
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Also clears the game's per-den state, which a new day clears (testing: use if a plain rebuild "
-                          "doesn't show the new raid).");
+    if (ImGui::Button("Reload crystals in the world")) g_status = std::string("Reload asked.") + refresh_note(refresh_crystals(1));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Makes the crystals in the world match this list (no reroll). Done by itself after every write.");
 
-    if (g_have_dens && ImGui::BeginTable("dens", 8, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                                                   ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable,
-                                         ImVec2(0, 260))) {
+    where_update();
+    float me[3];
+    bool have_me;
+    {
+        std::lock_guard<std::mutex> l(g_me_lock);
+        have_me = g_have_me;
+        memcpy(me, g_me, sizeof me);
+    }
+    ImGui::SameLine();
+    if (have_me) ImGui::Text("You are at %.0f, %.0f, %.0f", me[0], me[1], me[2]);
+    else ImGui::TextDisabled("Your position: not in the field yet");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("x, height, z in metres. East is +x, north is -z.");
+
+    struct Row { u32 i; const Den *d; Result r; const RaidPoint *pt; float dist; const char *area; };
+    static std::vector<Row> rows;
+    rows.clear();
+    for (u32 i = 0; g_have_dens && i < nd; i++) {
+        const Den &d = g_dens[i];
+        if (den_unused(d)) continue;            /* seed 0 would list as a raid of its own (5-star Hatterene) */
+        Row w = {i, &d, generate(d.seed, g_region, d.content, g_progress), point_of(g_region, d), -1.0f, ""};
+        if (w.pt && have_me) w.dist = sqrtf((w.pt->x - me[0]) * (w.pt->x - me[0]) + (w.pt->z - me[2]) * (w.pt->z - me[2]));
+        if (d.area < 32) w.area = g_area_names[g_region][d.area].c_str();
+        rows.push_back(w);
+    }
+    enum { C_DEN, C_ACTIVE, C_AREA, C_DIST, C_POS, C_STARS, C_MON, C_TERA, C_SHINY, C_SEED, C_COUNT };
+    if (g_have_dens && ImGui::BeginTable("dens2", C_COUNT, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+                                                    ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable |
+                                                    ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Sortable |
+                                                    ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable,
+                                          ImVec2(0, 280))) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        const char *heads[] = {"#", "On", "Area", "Seed", "Stars", "Species", "Tera", "Shiny"};
-        for (const char *h : heads) ImGui::TableSetupColumn(h);
+        const char *heads[C_COUNT] = {"Den", "Active", "Area", "From you", "Position", "Stars", "Pokemon", "Tera", "Shiny", "Seed"};
+        for (int c = 0; c < C_COUNT; c++) ImGui::TableSetupColumn(heads[c], c == C_DEN ? ImGuiTableColumnFlags_DefaultSort : 0);
         ImGui::TableHeadersRow();
-        for (u32 i = 0; i < nd; i++) {
-            const Den &d = g_dens[i];
-            Result r = generate(d.seed, g_region, d.content, g_progress);
+        if (ImGuiTableSortSpecs *ss = ImGui::TableGetSortSpecs()) {
+            if (ss->SpecsCount > 0) {
+                int col = ss->Specs[0].ColumnIndex;
+                bool desc = ss->Specs[0].SortDirection == ImGuiSortDirection_Descending;
+                auto key = [col](const Row &a, const Row &b) -> int {
+                    auto cmp = [](double x, double y) { return x < y ? -1 : x > y ? 1 : 0; };
+                    const char *an = a.r.raid ? name_of(D.species, a.r.raid->dev) : "~", *bn = b.r.raid ? name_of(D.species, b.r.raid->dev) : "~";
+                    switch (col) {
+                    case C_ACTIVE: return cmp(b.d->enabled, a.d->enabled);
+                    case C_AREA: { int c = strcmp(a.area, b.area); return c ? c : cmp(a.d->area, b.d->area); }
+                    case C_DIST: return cmp(a.dist < 0 ? 1e9 : a.dist, b.dist < 0 ? 1e9 : b.dist);
+                    case C_POS: return cmp(a.pt ? a.pt->x : 1e9, b.pt ? b.pt->x : 1e9);
+                    case C_STARS: return cmp(a.r.raid ? a.r.stars : 0, b.r.raid ? b.r.stars : 0);
+                    case C_MON: return strcmp(an, bn);
+                    case C_TERA: return cmp(a.r.raid ? a.r.tera : 99, b.r.raid ? b.r.tera : 99);
+                    case C_SHINY: return cmp(b.r.raid && b.r.shiny, a.r.raid && a.r.shiny);
+                    case C_SEED: return cmp(a.d->seed, b.d->seed);
+                    }
+                    return 0;
+                };
+                std::stable_sort(rows.begin(), rows.end(), [&](const Row &a, const Row &b) {
+                    int c = key(a, b);
+                    if (!c) return a.i < b.i;
+                    return desc ? c > 0 : c < 0;
+                });
+            }
+        }
+        for (const Row &w : rows) {
+            const Den &d = *w.d;
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             char lbl[16];
-            snprintf(lbl, sizeof lbl, "%u", i);
-            if (ImGui::Selectable(lbl, g_sel == (int)i, ImGuiSelectableFlags_SpanAllColumns)) {
-                g_sel = (int)i;
+            snprintf(lbl, sizeof lbl, "%u", w.i);
+            if (ImGui::Selectable(lbl, g_sel == (int)w.i, ImGuiSelectableFlags_SpanAllColumns)) {
+                g_sel = (int)w.i;
                 snprintf(g_seed_text, sizeof g_seed_text, "%08X", d.seed);
             }
-            ImGui::TableNextColumn(); ImGui::TextUnformatted(d.enabled ? "yes" : "-");
-            ImGui::TableNextColumn(); ImGui::Text("%u-%u-%u", d.area, d.group, d.point);
-            ImGui::TableNextColumn(); ImGui::Text("%08X", d.seed);
-            if (r.raid) {
-                ImGui::TableNextColumn(); ImGui::Text("%d", r.stars);
-                ImGui::TableNextColumn(); ImGui::TextUnformatted(name_of(D.species, r.raid->dev));
-                ImGui::TableNextColumn(); ImGui::TextUnformatted(name_of(D.types, (u32)r.tera));
-                ImGui::TableNextColumn(); ImGui::TextUnformatted(r.shiny ? "SHINY" : "");
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(d.enabled ? "yes" : "done");
+            ImGui::TableNextColumn();
+            if (*w.area) ImGui::TextUnformatted(w.area);
+            else ImGui::Text("area %u", d.area);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("The game's numbers: area %u, group %u, point %u", d.area, d.group, d.point);
+            ImGui::TableNextColumn();
+            if (w.dist >= 0) ImGui::Text("%.0f m %s", w.dist, compass(w.pt->x - me[0], w.pt->z - me[2]));
+            ImGui::TableNextColumn();
+            if (w.pt) ImGui::Text("%.0f, %.0f, %.0f", w.pt->x, w.pt->y, w.pt->z);
+            else ImGui::TextDisabled(d.enabled ? "?" : "-");
+            if (w.r.raid) {
+                ImGui::TableNextColumn(); ImGui::Text("%d", w.r.stars);
+                ImGui::TableNextColumn(); ImGui::TextUnformatted(name_of(D.species, w.r.raid->dev));
+                ImGui::TableNextColumn(); ImGui::TextUnformatted(name_of(D.types, (u32)w.r.tera));
+                ImGui::TableNextColumn(); ImGui::TextUnformatted(w.r.shiny ? "SHINY" : "");
             } else {
                 ImGui::TableNextColumn(); ImGui::TextUnformatted(d.content == 3 ? "7" : "-");
                 ImGui::TableNextColumn(); ImGui::TextDisabled(d.content >= 2 ? "(event)" : "(none)");
                 ImGui::TableNextColumn(); ImGui::TableNextColumn();
             }
+            ImGui::TableNextColumn(); ImGui::Text("%08X", d.seed);
         }
         ImGui::EndTable();
     }
 
+    ImGui::Checkbox("Writing a den also makes it active again", &g_enable);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("A den you finished today shows \"done\". On: a write brings its crystal back.");
+
     if (g_have_dens && g_sel < (int)nd) {
         const Den &d = g_dens[g_sel];
-        ImGui::SeparatorText("Selected den");
-        Result r = generate(d.seed, g_region, d.content, g_progress);
+        char head[64];
+        snprintf(head, sizeof head, "Den %d: set by seed", g_sel);
+        ImGui::SeparatorText(head);
+        bool unused = den_unused(d);
+        Result r = unused ? Result{} : generate(d.seed, g_region, d.content, g_progress);
         if (r.raid) stats_line(r);
-        else ImGui::TextDisabled("Den %d: %s", g_sel, d.content >= 2 ? "an event raid (not covered)" : "no raid");
+        else ImGui::TextDisabled("Den %d: %s", g_sel, unused ? "an unused slot (no den in the world)"
+                                                  : d.content >= 2 ? "an event raid (not covered)" : "no raid");
+        if (const RaidPoint *pt = unused ? nullptr : point_of(g_region, d)) {
+            const char *an = d.area < 32 ? g_area_names[g_region][d.area].c_str() : "";
+            if (have_me)
+                ImGui::Text("%s%sat %.0f, %.0f, %.0f: %.0f m %s of you", an, *an ? ", " : "", pt->x, pt->y, pt->z,
+                            sqrtf((pt->x - me[0]) * (pt->x - me[0]) + (pt->z - me[2]) * (pt->z - me[2])),
+                            compass(pt->x - me[0], pt->z - me[2]));
+            else ImGui::Text("%s%sat %.0f, %.0f, %.0f", an, *an ? ", " : "", pt->x, pt->y, pt->z);
+        }
+        ImGui::BeginDisabled(unused);
         ImGui::SetNextItemWidth(120);
         ImGui::InputText("Seed (hex)", g_seed_text, sizeof g_seed_text, ImGuiInputTextFlags_CharsHexadecimal);
         ImGui::SameLine();
         static int content = 0;
         ImGui::SetNextItemWidth(160);
-        ImGui::Combo("##content", &content, "Standard (1-5)\0Black (6)\0");
+        ImGui::Combo("##content", &content, "Normal crystal (1-5 stars)\0Black crystal (6 stars)\0");
         ImGui::SameLine();
-        if (ImGui::Button("Write seed")) {
+        if (ImGui::Button("Write to this den")) {
             u32 s = (u32)strtoul(g_seed_text, NULL, 16);
             int n = write_den(g_region, (u32)g_sel, s, (u32)content, g_enable);
             char m[192];
             snprintf(m, sizeof m, "den %d: seed %08X written (%d copies).%s", g_sel, s, n, refresh_note(refresh_crystals(1)));
             g_status = m;
         }
+        ImGui::EndDisabled();
     }
 
-    ImGui::SeparatorText("Find a raid");
+    ImGui::SeparatorText("Put a chosen Pokemon in a den");
     char preview[96] = "(choose)";
     if (g_want.raid >= 0 && g_want.raid < (int)D.raids.size()) {
         const Raid &e = D.raids[g_want.raid];
@@ -550,7 +701,7 @@ static void ui() {
     }
     ImGui::SetNextItemWidth(320);
     static FilterCombo fc_raid, fc_tera;
-    if (fc_raid.begin("Raid", preview)) {
+    if (fc_raid.begin("Pokemon", preview)) {
         for (int s = 1; s <= 6; s++)
             for (u32 i : D.table[g_region][s]) {
                 const Raid &e = D.raids[i];
@@ -575,8 +726,6 @@ static void ui() {
             fc_tera.end();
         }
     }
-    ImGui::SameLine();
-    ImGui::Checkbox("Turn the den on", &g_enable);
 
     bool reachable = true;
     if (g_want.raid >= 0) {
@@ -588,16 +737,18 @@ static void ui() {
         }
     }
     if (g_finding) {
-        ImGui::Text("Searching... %.1f M seeds", (double)g_find_tried / 1e6);
+        ImGui::Text("Searching seeds... %.1f M tried", (double)g_find_tried / 1e6);
         ImGui::SameLine();
         if (ImGui::Button("Stop")) g_find_stop = true;
     } else if (g_want.raid >= 0 && reachable) {
         Want w = g_want;
         w.region = g_region;
         w.progress = g_progress;
-        bool one = ImGui::Button("Find for the selected den");
+        char one_lbl[64];
+        snprintf(one_lbl, sizeof one_lbl, "Search a seed for den %d", g_sel);
+        bool one = ImGui::Button(one_lbl);
         ImGui::SameLine();
-        bool all = g_have_dens && ImGui::Button("Find for all dens here");
+        bool all = g_have_dens && ImGui::Button((std::string("Search seeds for every ") + region_names[g_region] + " den").c_str());
         if (one || all) {
             g_find_stop = false;
             g_finding = true;
@@ -611,14 +762,16 @@ static void ui() {
             const Raid &e = D.raids[g_want.raid >= 0 ? g_want.raid : 0];
             u32 content = e.stars == 6 ? 1 : 0;
             ImGui::SameLine();
-            if (g_have_dens && ImGui::Button(g_found_seeds.size() == 1 ? "Write into the selected den" : "Write into every den")) {
+            if (g_have_dens && ImGui::Button(g_found_seeds.size() == 1 ? "Write to the selected den" : "Write to every den")) {
                 int dens = 0, copies = 0;
                 if (g_found_seeds.size() == 1) {
-                    copies = write_den(g_region, (u32)g_sel, g_found_seeds[0], content, g_enable);
-                    dens = 1;
+                    if (g_sel < (int)nd && !den_unused(g_dens[g_sel])) {
+                        copies = write_den(g_region, (u32)g_sel, g_found_seeds[0], content, g_enable);
+                        dens = 1;
+                    }
                 } else
                     for (u32 i = 0; i < nd && i < g_found_seeds.size(); i++) {
-                        if (!g_dens[i].enabled && !g_enable) continue;
+                        if (den_unused(g_dens[i]) || (!g_dens[i].enabled && !g_enable)) continue;
                         copies += write_den(g_region, i, g_found_seeds[i], content, g_enable);
                         dens++;
                     }
@@ -659,6 +812,7 @@ extern "C" __declspec(dllexport) const NxMod *nx_mod_init(const NxModHost *host)
     g_rom = strcmp(host->title_id, "0100A3D008C5C000") ? 2 : 1;
     if (!modkit::init(host, "raids")) return NULL;
     load_data(host->cache_dir);
+    load_areas(host->cache_dir);
     modkit::window("Tera Raids", "F6", is_open, toggle);
     if (!D.loaded) host->log(0, "raids: %s", D.error.c_str());
     else host->log(1, "raids: %zu raid table entries, %s", D.raids.size(), g_rom == 2 ? "Violet" : "Scarlet");
