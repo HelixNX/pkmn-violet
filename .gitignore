@@ -1,0 +1,11 @@
+# Whitelist: the game's source, its notes and the empty rom/ placeholder.
+# Game data (ROMs, dumps, extracts, analysis, lifted C, builds) never gets committed.
+/*
+!/.gitignore
+!/README.md
+!/CLAUDE.md
+!/NOTES.md
+!/rom/
+/rom/*
+!/rom/.gitkeep
+!/violetrecomp
