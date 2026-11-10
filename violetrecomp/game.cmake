@@ -7,6 +7,7 @@ nx_game(GAME_JSON "${CMAKE_CURRENT_LIST_DIR}/game.json" SOURCES "${CMAKE_CURRENT
 nx_mod(violet_raids SOURCES "${CMAKE_CURRENT_LIST_DIR}/mods/raids/raids.cpp")           # Tera raids (F6)
 nx_mod(violet_items SOURCES "${CMAKE_CURRENT_LIST_DIR}/mods/items/items.cpp")           # Items (F7)
 nx_mod(violet_mons SOURCES "${CMAKE_CURRENT_LIST_DIR}/mods/mons/mons.cpp")              # Spawn a Pokemon (F8)
-foreach(_m violet_raids violet_items violet_mons)
+nx_mod(violet_weather SOURCES "${CMAKE_CURRENT_LIST_DIR}/mods/weather/weather.cpp")     # Weather: rain toggle (F9), window (F10)
+foreach(_m violet_raids violet_items violet_mons violet_weather)
     target_include_directories(${_m} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/mods/common")
 endforeach()

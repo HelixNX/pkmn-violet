@@ -36,7 +36,8 @@ menu is nxrecomp's `nxui.dll` next to the exe (ui/nxui.cpp; without it the game 
 optional DLLs in `build\cmake\mods\` (`NX_MODS=0` loads none), one each: **violet_raids** (Tera Raids, F6: find
 seeds, write dens), **violet_items** (Items, F7: give / set, a Lua console in the game's VM), **violet_mons** (Spawn
 a Pokemon, F8: into the boxes; wild spawns made to order; "Around you": spawn on the player, the area's spawn list
-and weights; held items). Sources `mods\<name>\`, shared `mods\common\`. Their data: `python mods\raids\raiddata.py`
+and weights; held items), **violet_weather** (F9 toggles rain; Weather window, F10: any type, transition time,
+back to the game's own). Sources `mods\<name>\`, shared `mods\common\`. Their data: `python mods\raids\raiddata.py`
 (raids.dat, encounter tables; needs `build\ooz`), `mons_*.txt` and `items.txt` in `build\mods\` from svedit
 (`monsdata`, `items`). Packages: `-Mods all` (or names) copies the DLLs; the data is not packaged (game-derived).
 
@@ -60,7 +61,7 @@ edits: `violetrecomp\tools\svedit` (.NET 9 + PKHeX.Core; back up `build\save` fi
 - Mods: F6 raids and F7 items user-checked; F8 box writer and the wild species swap user-checked. **Not yet tried
   in game:** F8 "Spawn \<species\> on me" and the row spawn fix (a kept native entry crashed the game; now found again
   at spawn time), held items, the no-battles toggle, the rest of the wild spec (shiny, IVs, moves, Tera on a caught
-  one). **The new menu (2026-11-07)**: built and it loads (nxui.dll, the three mods as separate DLLs, ImGui on the
+  one); the weather mod (2026-11-11; its type numbers are a guess: NOTES.md, "Weather mod"). **The new menu (2026-11-07)**: built and it loads (nxui.dll, the three mods as separate DLLs, ImGui on the
   swapchain; a 45 s unattended run). **User-checked 2026-11-07: joining a room from the menu after an offline start works**
   (it first crashed: ldn:u / bsd:u were chosen once at start-up, the offline stub when not in a room; now NETPLAY builds
   always register the room-backed ones, which answer as airplane mode until a room is joined).

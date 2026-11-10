@@ -1531,3 +1531,31 @@ Not done, ranked (details in the reference; file:line there):
    second pack. Notes for `nxrecomp/docs/GPUS.md`.
 10. Player package: plain-language crash explanations (crash_explain.c), thread priorities / P-cores and
     EcoQoS opt-out (platform/windows.c 347-369, 816-823), fibers if Violet ever calls nn::os::InitializeFiber.
+
+## Weather mod (2026-11-11; built, NOT yet tried in game)
+
+`mods/weather/weather.cpp` -> `violet_weather.dll`: **F9** toggles rain, window **Weather (F10)** sets any type,
+the transition time, or "Game's own" (reset). Through host->run_script (lua.c), no hooks or patches.
+- Found with IDA batch mode (`idat -A -S<script>` on a copy of `dump/elf/main.elf.i64`; REA did not connect). The
+  timeline event "Title/Weather/WeatherChange/WeatherChange" is set up by 1521448: its start callback 202f928 reads
+  `WeatherType` (1 when absent), calls `main.tml.TimeLineCommand.CFunc_Tml_SetEnvChangeSpan(seconds)` (seconds =
+  202fa30, the event's remaining frames / frame rate), then 202fa74 -> 202fb44, the Haxe-Lua static call of
+  `main.tml.TimeLineCommand` method hash `A3EC462E45551FD6` (its name is not in the binary) with the type.
+  "WeatherReset": 202ff54 = SetEnvChangeSpan, then `CFunc_Tml_ResetWeather`; at its end 20301c0 =
+  `CFunc_Tml_ResetChangeSpan`. Native -> script calls: 202f80c(class, method) / 18e3f2c(class, method, &arg) hash
+  both names (FNV-1a 64, game basis) and call through 15745bc / 18e4050.
+- In Lua: class `CA71F0CDF966F3175` (= hash of "main.tml.TimeLineCommand"); the mod tries `S<hash>` then
+  `F<hash>`: set `A3EC462E45551FD6(type)`, reset `ECAF51D6E7046362()`, span `8614855A6EF844D8(s)`, span reset
+  `58CE0E7D1599C50E()` (sent ~1 s after the transition).
+- **Type numbers are a guess**: 1 normal (the default above), then the encounter weather flags' order (PKHeX
+  AreaWeather9 = 1 << (type - 1)): 2 overcast, 3 rain, 4 thunderstorm, 5 intense sun, 6 snow, 7 snowstorm,
+  8 sandstorm, 9 heavy fog. The window's "Raw type number" box is there to check them. To read the real ones:
+  the script function's bytecode (main.blua via trinity.py, needs `build/ooz`, not on this machine) or 1d56928
+  (ConditionCurrentWeather, compares a WeatherType from data).
+- Open: whether the game's own weather schedule overrides a forced type after a while (the timeline expects a
+  reset at the cutscene's end); whether the static takes `self` (a Lua error would say so in run.log, `lua: error`).
+- First try (2026-11-11, the GTX 1650 Ti machine): F9 reached the mod and queued its chunk, but no chunk ever ran
+  (no `lua: first chunk` line). That machine's `build/lifted` was from 2026-10-18, older than every patches.txt hook
+  since (lua_pcall_entry, wild, raidgem): lifted code is per machine, so pulling a patches.txt change needs a re-lift
+  (`python ..\..\nxrecomp\tools\lifter\a64lift.py lift ..\build\lifted` from violetrecomp\, 12 min, then a 20 min
+  build). The build gives no warning when patches.txt is newer than the lift.
