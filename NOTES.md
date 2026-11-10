@@ -222,7 +222,19 @@ action frames with OUI 00:22:AA); the .pcap is the reference for the daemon. The
   half-res effects layer (`960x540 f41 @12f4f6a000`) has 7 lit pixels of 518,400 (beacon frames: 12k-210k), so
   the streaks are never drawn, not lost later. Next: F12 in rain and keep that session's run.log (the trace
   lists every draw: are rain emitters drawn at all; if not, CPU side (VFX never makes them) or a skipped draw
-  (unsupported shader, pipeline building, an indirect draw with count 0)). Text with letters missing,
+  (unsupported shader, pipeline building, an indirect draw with count 0)).
+  - 2026-11-11, GTX 1650 Ti, weather mod in the opening area (Poco Path, starters following; logs in
+    `build/frames/rain-*`, `rain2-*`, `rain3-*`): forced rain / thunderstorm leave the sky blue and the ground dry; rain
+    adds no rain draws at all, thunderstorm adds white falling dots (full res, drawn) and 8 tall quads (vs
+    7a1f81cac22350a1, fs df61a3468379ebd4 = soft particles: samples the 960x540 depth copy, discards on its fade)
+    with 0 samples even with depth test off (`NX_DEBUG_RT=12f4f6a000:2`). Ruled out: skipped draws (none of the
+    DrawTexture / XFB / multi-draw kind), particle clocks (spawn / lifetime vs cb10[2].x all alive), the 1080p ->
+    960x540 depth copy (native blit on NVIDIA, depth aspect). Light shafts (vs 6e7faccfa4d7de47) in the same layer
+    have 0 samples with the depth test on and 326k-590k with it off: check that half-res depth test (the ds is
+    @12f541a000, written by draws d4ea93c14e5c47f0) before blaming the weather. Suspect the area: the opening
+    may have no weather of its own; test natural rain after the prologue. Tools: `NX_TRACE_VCB=10:2,3`
+    (cb10[2].x = emitter time, cb10[3] = 1 1 1 1 here), `NX_TRACE_FILTER='960x540 f41'`, `NX_DEBUG_RT=<rt>:bits`.
+  Text with letters missing,
   different ones by position ("Mareep" as " a eep", the link code prompt "   er a co  "), seen before the
   translator fixes too, then not again: suspect the game's run-time glyph atlas (an upload / copy lost or late);
   F12 while it shows.
