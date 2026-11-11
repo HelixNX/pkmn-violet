@@ -113,8 +113,7 @@ bool build_egg(const void *ctx, const Trainer &save_t, u8 *d, std::string &msg) 
     d[O_ABILITY_NUM] = (u8)(1 << e.ability_slot);
     wr32(d + O_PID, pid);
     d[O_NATURE] = d[O_STAT_NATURE] = (u8)e.nature;
-    int gender = s.gender == 255 ? 2 : s.gender == 254 ? 1 : s.gender == 0 ? 0 : e.gender;
-    d[O_GENDER] = (u8)(gender << 1);
+    d[O_GENDER] = (u8)(pick_gender(s, e.gender, rng()) << 1);
     wr16(d + O_FORM, s.form);
     d[O_HEIGHT] = (u8)rng(); d[O_WEIGHT] = (u8)rng(); d[O_SCALE] = (u8)rng();
     if (row->has_nick && (!g_save_trainer.ok || t.language == g_save_trainer.language)) memcpy(d + O_NICK, row->nick, 26);
@@ -210,6 +209,18 @@ Trainer g_me;
 bool g_me_ok = false;
 std::string g_trainers_msg;
 
+/* Trainers seen: every other trainer a box read found (OT of a mon, not of an egg: an egg's OT may be one we made up),
+ * kept in <build>\mods\mons_trainers_seen.txt so their ids stay at hand after the mon has left the boxes.
+ *   id32  gender  version  first seen (YYYY-MM-DD)  name (UTF-8) */
+struct SeenTrainer {
+    u32 id;
+    u8 gender, version;
+    std::string first_seen, name;
+};
+std::vector<SeenTrainer> g_seen;
+std::string g_seen_path;
+bool seen_add_from_boxes(u32 me);
+
 void read_box_mons() {
     std::vector<u8> blk;
     std::string msg;
@@ -235,11 +246,70 @@ void read_box_mons() {
         g_box_mons.push_back(m);
     }
     char b[128];
+    size_t before = g_seen.size();
+    if (g_me_ok) seen_add_from_boxes(id32(g_me.tid, g_me.sid));    /* without our own ids every mon would look "other" */
     snprintf(b, sizeof b, "%zu mons in the boxes.", g_box_mons.size());
     g_trainers_msg = b;
+    if (g_seen.size() > before) g_trainers_msg += " Remembered " + std::to_string(g_seen.size() - before) + " new trainer(s).";
 }
 
 const char *version_name(u8 v) { return v == 50 ? "Scarlet" : v == 51 ? "Violet" : v == 0 ? "-" : "other game"; }
+
+void seen_save() {
+    if (g_seen_path.empty()) return;
+    std::string tmp = g_seen_path + ".tmp";
+    FILE *f = fopen(tmp.c_str(), "wb");
+    if (!f) return;
+    for (auto &t : g_seen) fprintf(f, "%u\t%u\t%u\t%s\t%s\n", t.id, t.gender, t.version, t.first_seen.c_str(), t.name.c_str());
+    fclose(f);
+    MoveFileExA(tmp.c_str(), g_seen_path.c_str(), MOVEFILE_REPLACE_EXISTING);
+}
+
+void seen_load(const std::string &cache_dir) {
+    g_seen_path = cache_dir + "\\mods\\mons_trainers_seen.txt";
+    g_seen.clear();
+    std::string keep = g_error;
+    auto rows = read_tsv(g_seen_path);       /* none yet: not an error */
+    g_error = keep;
+    for (auto &r : rows) {
+        if (r.size() < 5 || r[0].empty() || r[0][0] == '#') continue;
+        g_seen.push_back({(u32)strtoul(r[0].c_str(), nullptr, 10), (u8)atoi(r[1].c_str()), (u8)atoi(r[2].c_str()), r[3], r[4]});
+    }
+}
+
+/* adds the box's other trainers not seen before; true if any */
+bool seen_add_from_boxes(u32 me) {
+    bool added = false;
+    for (auto &m : g_box_mons) {
+        if (m.egg || m.id == me || m.ot.empty()) continue;
+        bool known = false;
+        for (auto &t : g_seen) if (t.id == m.id && t.name == m.ot) { known = true; break; }
+        if (known) continue;
+        char day[16];
+        time_t now = time(nullptr);
+        struct tm lt;
+        localtime_s(&lt, &now);
+        strftime(day, sizeof day, "%Y-%m-%d", &lt);
+        g_seen.push_back({m.id, m.ot_gender, m.version, day, m.ot});
+        added = true;
+    }
+    if (added) seen_save();
+    return added;
+}
+
+void use_as_hatcher(u32 id, const std::string &name) {
+    g_egg.other_hatcher = true;
+    g_egg.hatcher_id = id;
+    snprintf(g_egg.hatcher_name, sizeof g_egg.hatcher_name, "%s", name.c_str());
+    egg_status("Eggs from the Egg tab are now shiny for " + name + " (" + id_text(id) + ") when shiny is on.");
+}
+
+void use_as_ot(u32 id, u8 gender, const std::string &name) {
+    g_egg.custom_ot = true;
+    g_egg.ot_id = id;
+    g_egg.ot_gender = gender;
+    snprintf(g_egg.ot_name, sizeof g_egg.ot_name, "%s", name.c_str());
+}
 
 }  // namespace
 
@@ -264,6 +334,7 @@ void egg_init(const char *cache_dir) {
         if (e.species >= 0) g_eggs.push_back(e);
     }
     if (g_eggs.empty()) g_egg_error = "No egg list: run svedit monsdata again (it writes build\\mods\\mons_eggs.txt).";
+    seen_load(cache_dir);
     if (g_save_trainer.ok) { g_egg.ot_id = id32(g_save_trainer.tid, g_save_trainer.sid); g_egg.hatcher_id = g_egg.ot_id; }
     if (modkit::host()) modkit::host()->log(1, "mons: %zu egg species / forms", g_eggs.size());
 }
@@ -293,10 +364,11 @@ void egg_ui(int &species_index) {
 
     ImGui::SeparatorText("The Pokemon inside");
     ImGui::Checkbox("Shiny", &e.shiny);
-    if (s.gender != 0 && s.gender != 254 && s.gender != 255) {
+    if (has_both_genders(s)) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(100);
-        ImGui::Combo("Gender", &e.gender, "Male\0Female\0");
+        ImGui::Combo("Gender", &e.gender, "Male\0Female\0Random\0");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Random: rolled on the species' gender ratio for each egg");
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160);
@@ -393,9 +465,20 @@ void egg_ui(int &species_index) {
         ImGui::Checkbox("Shiny for another trainer (who hatches it)", &e.other_hatcher);
         if (e.other_hatcher) {
             ImGui::Indent();
-            id_edit("hatcher", e.hatcher_id);
+            if (id_edit("hatcher", e.hatcher_id)) e.hatcher_name[0] = 0;
             if (e.hatcher_name[0]) { ImGui::SameLine(); ImGui::TextDisabled("%s", e.hatcher_name); }
-            ImGui::TextDisabled("Their ids: Trainers tab, on a mon they traded you; or their trainer card's ID No.");
+            if (!g_seen.empty()) {
+                ImGui::SetNextItemWidth(260);
+                if (ImGui::BeginCombo("##seen", "A trainer seen before...")) {
+                    for (size_t i = 0; i < g_seen.size(); i++) {
+                        auto &t = g_seen[i];
+                        std::string l = t.name + "  " + id_text(t.id) + "  " + version_name(t.version) + "##" + std::to_string(i);
+                        if (ImGui::Selectable(l.c_str(), t.id == e.hatcher_id)) use_as_hatcher(t.id, t.name);
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+            ImGui::TextDisabled("Their ids: Trainers tab, on a mon they traded you (remembered after); or their trainer card's ID No.");
             ImGui::Unindent();
         }
     }
@@ -485,25 +568,52 @@ void trainers_ui() {
             else ImGui::Text("%5u / %5u", (u16)m.id, (u16)(m.id >> 16));
             ImGui::TableNextColumn(); ImGui::TextUnformatted(version_name(m.version));
             ImGui::TableNextColumn();
-            if (ImGui::SmallButton("Hatcher")) {
-                g_egg.other_hatcher = true;
-                g_egg.hatcher_id = m.id;
-                snprintf(g_egg.hatcher_name, sizeof g_egg.hatcher_name, "%s", m.ot.c_str());
-                egg_status("Eggs from the Egg tab are now shiny for " + m.ot + " (" + id_text(m.id) + ") when shiny is on.");
-            }
+            if (ImGui::SmallButton("Hatcher")) use_as_hatcher(m.id, m.ot);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Make the Egg tab's eggs shiny for this trainer when they hatch them");
             ImGui::SameLine();
-            if (ImGui::SmallButton("OT")) {
-                g_egg.custom_ot = true;
-                g_egg.ot_id = m.id;
-                g_egg.ot_gender = m.ot_gender;
-                snprintf(g_egg.ot_name, sizeof g_egg.ot_name, "%s", m.ot.c_str());
-            }
+            if (ImGui::SmallButton("OT")) use_as_ot(m.id, m.ot_gender, m.ot);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Make the Egg tab's eggs with this trainer as OT");
             ImGui::PopID();
         }
         ImGui::EndTable();
     }
+
+    ImGui::SeparatorText("Trainers seen before");
+    if (g_seen.empty()) {
+        ImGui::TextDisabled("None yet: each other trainer \"Read the boxes\" finds is remembered here (build\\mods\\mons_trainers_seen.txt).");
+        return;
+    }
+    int forget = -1;
+    if (ImGui::BeginTable("##seen", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY |
+                                           ImGuiTableFlags_SizingFixedFit, ImVec2(0, 200))) {
+        ImGui::TableSetupColumn("OT", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(g_id_mode == 0 ? "ID No. / SID" : "TID16 / SID16");
+        ImGui::TableSetupColumn("Game");
+        ImGui::TableSetupColumn("First seen");
+        ImGui::TableSetupColumn("Use as");
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableHeadersRow();
+        for (size_t i = 0; i < g_seen.size(); i++) {
+            auto &t = g_seen[i];
+            ImGui::PushID((int)i + 100000);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::Text("%s %s", t.name.c_str(), t.gender ? "(F)" : "(M)");
+            ImGui::TableNextColumn();
+            if (g_id_mode == 0) ImGui::TextUnformatted(id_text(t.id).c_str());
+            else ImGui::Text("%5u / %5u", (u16)t.id, (u16)(t.id >> 16));
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(version_name(t.version));
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(t.first_seen.c_str());
+            ImGui::TableNextColumn();
+            if (ImGui::SmallButton("Hatcher")) use_as_hatcher(t.id, t.name);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("OT")) use_as_ot(t.id, t.gender, t.name);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Forget")) forget = (int)i;
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (forget >= 0) { g_seen.erase(g_seen.begin() + forget); seen_save(); }
 }
 
 /* for svedit `check`: an egg these settings make, encrypted, to a file (no game needed). hatcher_id 0: shiny for the OT */

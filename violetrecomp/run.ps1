@@ -6,7 +6,12 @@ param([int]$Log = 1, [int]$Timeout = 0, [switch]$NoBuild, [int]$Tail = 40, [int]
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $NoBuild) {
     $out = cmd /c "$PSScriptRoot\build.bat --target violetrecomp 2>&1"
-    if ($LASTEXITCODE -ne 0) { $out | Select-String -Pattern "error" | Select-Object -First 30; exit 1 }
+    if ($LASTEXITCODE -ne 0) {
+        'build failed:'
+        $err = @($out | Select-String -Pattern "error" | Select-Object -First 30)
+        if ($err) { $err } else { $out | Select-Object -Last 15 }   # a failure without "error" in it still shows
+        exit 1
+    }
 }
 $exe = "$root\build\cmake\violetrecomp.exe"
 $args2 = @('--log', $Log); if ($DumpAfter) { $args2 += @('--dump-after', $DumpAfter) }

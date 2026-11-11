@@ -154,8 +154,7 @@ void build(const Spec &p, const Trainer &t, u8 *d) {
     d[0x16] = (u8)(1 << p.ability_slot);
     wr32(d + 0x1C, pid);
     d[0x20] = d[0x21] = (u8)p.nature;
-    int gender = s.gender == 255 ? 2 : s.gender == 254 ? 1 : s.gender == 0 ? 0 : p.gender;
-    d[0x22] = (u8)(gender << 1);
+    d[0x22] = (u8)(pick_gender(s, p.gender, rng()) << 1);
     wr16(d + 0x24, s.form);
     for (int i = 0; i < 6; i++) d[0x26 + ev_slot[i]] = (u8)p.ev[i];
     d[0x48] = (u8)rng(); d[0x49] = (u8)rng(); d[0x4A] = (u8)rng();
@@ -556,7 +555,7 @@ bool wild_spec_apply(const Spec &p, int level, int shiny, bool all, int pct) {
     w.sex = 0xff; w.nature = 0xffff; w.ability = 0xff; w.tera = -1;
     memset(w.iv, 0xff, 6);
     if (all) {
-        if (s.gender != 0 && s.gender != 254 && s.gender != 255) w.sex = (u8)p.gender;
+        if (has_both_genders(s) && p.gender != GENDER_RANDOM) w.sex = (u8)p.gender;   /* random: as the game rolls it */
         w.nature = (u16)p.nature;
         w.ability = (u8)p.ability_slot;
         if (p.tera >= 0 && p.tera < 18) w.tera = (int8_t)p.tera;
@@ -951,10 +950,11 @@ static void ui_build(Spec &p, const Species *s) {
     p.level = p.level < 1 ? 1 : p.level > 100 ? 100 : p.level;
     ImGui::SameLine();
     ImGui::Checkbox("Shiny", &p.shiny);
-    if (s->gender != 0 && s->gender != 254 && s->gender != 255) {
+    if (has_both_genders(*s)) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(100);
-        ImGui::Combo("Gender", &p.gender, "Male\0Female\0");
+        ImGui::Combo("Gender", &p.gender, "Male\0Female\0Random\0");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Random: rolled on the species' gender ratio for each mon");
     }
     ImGui::SetNextItemWidth(160);
     if (fc_nature.begin("Nature", natures[p.nature])) {

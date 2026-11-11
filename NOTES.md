@@ -536,6 +536,11 @@ work ~0.7 ms. Measured CPU ~4.1-4.3 ms (normal for static recomp), GPU ~5.5 ms (
 - **Spawn-pool rules** (user: "mess with the normal spawning rules"): wrap the Lua filter (`F2F6C7BBE115AFBCB` /
   `F67A9C2A9373A0AC6`), or patch the tables and reload the save, or patch the file as it's read. Ideas the user
   liked: version exclusives in both, any time of day, ignore story flags, equal weights, every species everywhere.
+  Version flags: EncountPokeData field 28 `versiontable` (a sub-table, slots 0 Scarlet / 1 Violet). Of 955 entries
+  (4.0.0) 889 both, 33 Scarlet-only (Paldea: Blaze Tauros, Larvitar, Pupitar, Drifloon, Drifblim, Stunky, Skuntank,
+  Deino, Zweilous, Skrelp, Dragalge, Oranguru, Stonjourner, the 7 ancient Paradoxes; Kitakami: Gligar, Volbeat,
+  Illumise, Cramorant; Blueberry: Alolan Vulpix, Plusle, Minun, Cranidos), 33 Violet-only (the mirror). Volbeat /
+  Illumise / Plusle / Minun are in both games at different spots. trinity.py needs numpy (installed 2026-11-11).
   Density: parameters `encounterCountMax`, `encounterCheckInterval`, `encounterUnregisterFrameCount` (loader
   main+1513f24; refs 1514048 / 151415c / 15142cc); Lua `SpawnLimit` / `SpawnTimer` / `radiusSpawnArea` near
   main.blua line 259k. Mass outbreaks are separate (BCAT `encountOutbreak/*_3_0_0`, save `KBCATOutbreak*`).
@@ -556,9 +561,11 @@ work ~0.7 ms. Measured CPU ~4.1-4.3 ms (normal for static recomp), GPU ~5.5 ms (
 - **A friend's save** (`build/saves/friend-2026-11-07/main`; dumps in `build/bcat/friend/`): raid blocks filled
   (identifier 20230728 = a 2023-07-28 delivery). `svedit copy <main> <from> "^KBCAT|^KOutbreakBC"` copied the 5
   KBCATRaid*, KBCATOutbreak* and 336 KOutbreakBC* blocks into `build/save` (backup
-  `build/saves/save-backup-2026-11-07-preevent`). No change in game: dens take delivered raids only at the new-day
-  reroll. To force: start with `NX_TIME` a day ahead (does new-day handler 01ea82c0 run on load?), or post
-  RaidGemForceLottery (01ea821c on M+8), or e23ec8(M, 1) (the reroll).
+  `build/saves/save-backup-2026-11-07-preevent`). No change in game at once: dens take delivered raids only at the
+  new-day reroll. **It worked after a restart (user, by 2026-11-11):** a Rillaboom raid in the crystals, shown as
+  "(event)" (not fought). The identifier 20230728 is the event's date: the 7-star Rillaboom (Normal Tera, Mightiest
+  Mark) first ran 2023-07-28 00:00 UTC to 07-30 (again 08-04..06); a Rillaboom rerun from 2026-06-04 (Nintendo
+  Wire) likely reused the delivery and its identifier.
 - Other route (agreed, not started): past / custom events from PKHeX.Core's embedded lists (EncounterDist9 /
   EncounterMight9); serve `build/bcat/delivery/raid/*_3_0_0` from bcat.c (most faithful) or write the blocks. Find
   the delivery schema (.bfbs near the raid tables?). Room broadcast (`--event <file>` to joiners) maybe later.
@@ -666,6 +673,11 @@ or "Game's own". Through run_script only.
 - PID fixed at creation; shininess checked against whoever hatches it. Shiny: random low half, high = low ^ TID ^ SID
   ^ (0-15); not shiny: rerolled until xor >= 16 for the hatcher.
 - Trainers tab: "Read the boxes" lists OT, ID No. / SID, game, shiny (box only, not party); per row "Hatcher" / "OT".
+  Each other trainer it finds (OT of a non-egg mon, not ours) is remembered in `build\mods\mons_trainers_seen.txt`
+  (id32, gender, version, first seen, name): "Trainers seen before" table (Hatcher / OT / Forget) and a picker under
+  "Shiny for another trainer" (2026-11-11).
+- Gender "Random" (Egg tab, Pokemon tab / box writer, wild spec): rolled on the species' ratio per mon (female when
+  1 + r % 252 < ratio); for the wild spec it leaves the game's own roll.
   Use: a friend trades any mon, read their ids, make the egg, trade it back, they hatch it shiny.
 - PKHeX 26.10.18 legality rules found: relearn moves = egg moves; nickname flag set; unhatched egg has NO met date;
   nickname buffer = egg name over the species name (leftovers are expected trash); 0 cycles fails, 1 legal; Master /

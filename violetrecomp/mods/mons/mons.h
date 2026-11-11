@@ -25,6 +25,17 @@ struct Species {
     u8 base[6];                     /* hp atk def spa spd spe */
     std::string label;
 };
+/* a mon's gender (0 male, 1 female, 2 genderless): fixed by the species, else the choice (0 male, 1 female,
+ * GENDER_RANDOM: rolled on the species' ratio with r, as the game rolls it: female when 1 + r % 252 < ratio) */
+enum { GENDER_RANDOM = 2 };
+inline bool has_both_genders(const Species &s) { return s.gender != 0 && s.gender != 254 && s.gender != 255; }
+inline int pick_gender(const Species &s, int choice, u32 r) {
+    if (s.gender == 255) return 2;
+    if (s.gender == 254) return 1;
+    if (s.gender == 0) return 0;
+    if (choice == GENDER_RANDOM) return (int)(1 + r % 252) < s.gender ? 1 : 0;
+    return choice ? 1 : 0;
+}
 struct Move { u16 id; u8 pp; std::string name; };
 struct Trainer { u16 tid = 0, sid = 0; u8 name[26] = {}; u8 gender = 0, language = 2, version = 51; u16 location = 6; bool ok = false; };
 
