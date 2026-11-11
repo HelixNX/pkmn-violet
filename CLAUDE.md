@@ -50,7 +50,8 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
   GTX 1650 Ti laptop (GPU-bound). Known rendering issues: missing letters (likely fixed 2026-11-10, unconfirmed),
   no rain streaks near the camera.
 - Local play over rooms between instances (Union Circle, Tera raids) and with a **real Switch** through
-  `../ldn-beacon` (raids; a link trade connected on the second join attempt 2026-11-11, result not reported).
+  `../ldn-beacon` (raids, link trades: user-checked 2026-11-11; slow to connect because the Switch's first join
+  attempts drop).
   Joining from the menu after an offline start works.
 - Event raids: the friend's delivery (7-star Rillaboom, identifier 20230728) shows as an event crystal after a
   restart. Not yet fought or caught.

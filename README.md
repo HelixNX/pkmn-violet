@@ -16,7 +16,7 @@ recompilation and with a real Switch through [ldn-beacon](https://github.com/Hel
 | Story, battles, catching, raids, riding, DLC | **works**, with saves |
 | Frame rate | any (30, 60, 120, uncapped) at normal game speed; ~170 fps uncapped on an RX 7800 XT, ~70-80 on a GTX 1650 Ti laptop |
 | Render scale | 1-4x, switchable while playing |
-| Local play (Union Circle, Tera raids) | **works** over rooms (the protocol Citra, yuzu and Eden rooms speak), between recompilations and with a real Switch through ldn-beacon. Link trades connect; a complete trade is not confirmed yet |
+| Local play (Union Circle, Tera raids, link trades) | **works** over rooms (the protocol Citra, yuzu and Eden rooms speak), between recompilations and with a real Switch through ldn-beacon |
 | Event raids | a delivery copied from another save shows up after a restart (no Nintendo servers) |
 | Known issues | some letters missing in text (a likely fix awaits checking), no rain streaks near the camera |
 | GPUs | Vulkan 1.3 with 32-wide compute subgroups and dynamic vertex input; tested on an NVIDIA GTX 1650 Ti and an AMD RX 7800 XT. Older GPUs (e.g. RX 580) are not supported yet |
@@ -80,7 +80,7 @@ Two players each run the recompilation (or one runs it with a real Switch next t
 .\start.ps1 violet -Room 127.0.0.1:24872 -Nick Host      # join it directly; or start normally and use Multiplayer > Rooms
 ```
 
-Then use the game's own local play: Union Circle, Tera raids with a link code. For a real Switch,
+Then use the game's own local play: Union Circle, Tera raids and link trades with a link code. For a real Switch,
 `.\start.ps1 room -Beacon` also starts ldn-beacon with an ESP32-S3 on USB as its radio (see its README).
 
 ## Mods
@@ -132,8 +132,8 @@ The history of all of it, every finding and every measured change, is in [`NOTES
   documented formats and legality rules shaped the raid and egg tools. The mods' code is our own.
 - **The Eden / yuzu / suyu projects**: their shader recompiler and room protocol were read for behaviour; the code
   here is our own.
-- **Fl4sh**'s "60 FPS" / "Dynamic FPS" patches, used to find the game's frame clocks.
-- Other recompilation projects read for ideas: Savage Wind (Breath of the Wild), the Pokémon
+- **[Fl4sh](https://github.com/Fl4sh9174)**'s "60 FPS" / "Dynamic FPS" patches, used to find the game's frame clocks.
+- Other recompilation projects read for ideas: [Savage Wind](https://github.com/Revivedx/SavageWindRecomp) (Breath of the Wild), the Pokémon
   Legends Z-A and Tears of the Kingdom recompilations.
 - [Dear ImGui](https://github.com/ocornut/imgui), [SDL3](https://www.libsdl.org/), [Opus](https://opus-codec.org/),
   [glslang](https://github.com/KhronosGroup/glslang), and [ooz](https://github.com/powzix/ooz) (Oodle Kraken, in a

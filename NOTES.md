@@ -415,7 +415,8 @@ Kernel / I/O:
   (ESP32-S3). Redirecting DNS to play online doesn't work: NPLN is TLS against Nintendo's CA + account / NSO tokens.
 - A recomp host leaves the security parameter (server random) zero; a trade opens its network twice (2026-11-11:
   `network of 192.168.1.2` at :34 and :37), the Switch joined 2 s after the second; first attempt dropped after 1.7 s
-  (deauthentication reason 3), second stayed.
+  (deauthentication reason 3), second stayed. **Link trades with a real Switch work** (user, 2026-11-11); the drops
+  are why connecting took long.
 - In Union Circle the world is simulated by one player at a time (it moves). Raids there are separate per player
   (others' raids only joined from the menu).
 
