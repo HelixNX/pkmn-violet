@@ -197,7 +197,10 @@ Time Trials lesson). V4 graphics. V5 audio, movies, input, saves. V6 playable. A
   on. Fix would be copying the target first.
 - **Render scale 1-4x** (switchable live, `rescale_all` at a present): 16:9 targets from 120x68 up are made N times
   larger when first drawn into; translate.py takes bit 18 of a handle and pc.scale (FragCoord, texelFetch, TXQ,
-  image coords). 360x360 targets drawn with the 1080p depth bound stay 1x. Downscale by a box filter (vk.c
+  image coords). The menus draw the 3D player into a 400x800 target and mons into 360x360 ones with the 1080p depth
+  still bound; a pass runs at its smallest target's scale, so they stayed 1x (user: "720p upscaled", F12 frame 26444).
+  `image_promote` (2026-11-11, user-checked): a colour target drawn while a scaled depth is bound joins the scale (2D,
+  not linear, >= 64x64). Downscale by a box filter (vk.c
   `downscale`, n x n bilinear taps, n up to 8). Render scale is supersampling; FSR 2/3 / DLSS need motion vectors and
   jitter Violet lacks; SMAA / FSR 1 not done.
 - Graphics patches (gfx.c, patches.txt): Improved Graphic Quality (`if gfx`; NX_QUALITY=0) and no DOF (`if nodof`;
