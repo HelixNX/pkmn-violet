@@ -1611,3 +1611,40 @@ a way to see a mon's TID / SID in game, natures etc., egg progress (trade it, wa
   `build\save\1-000000000000000100006d6b38726563-0\main`.
 - **Left to try in game:** make an egg, hatch it (how far 1 cycle is), trade one to a second instance and hatch it
   there.
+
+## TotK Recomp as a reference (2026-11-11, the GTX 1650 Ti laptop)
+
+`../ref/totk-pc-recomp` (Tears of the Kingdom on LAS Recomp + MacNativeGames, MIT, 7a37fc3) compared with nxrecomp
+area by area (lifter, draw translation, GPU passes / barriers, kernel). Behaviour only, our own code.
+
+Taken (nxrecomp; compiled, run, not yet measured apart):
+- kernel.c `kspin`: a thread about to sleep in `block` or `core_acquire` (waiting for a release) first polls ~20 us
+  with klk released (`NX_KSPIN_US`, 0 off; off below 6 logical processors). The first version hung the load: a
+  releaser could hand the core over after the last poll and the loop placed the thread again, taking a second core
+  for good; now it leaves when it holds a core whatever the poll said. Bench (60 s runs, too short: 3-5 scene
+  windows): spin on 14.8-18.5 ms, off 13.7-17.8 ms, no visible difference. A 135 s ABBA is still to do, best on
+  the RX 7800 XT.
+- gpu_pipe.c `pipeline_get`: a one-entry memo of the last ready pipeline (no hash or lock when a draw repeats the
+  previous key).
+- main.c: the process opts out of power throttling (EcoQoS, ignored timer resolution).
+
+Bench on this laptop: the stand-still scene is ~14 ms (70-80 fps), GPU busy 9.4, idle 4.5 (1.8 at a guest
+submission's start, 2.3-3.0 between its flushes; pool mirrors are on here, PCIe 15.8 GB/s). Not a regression: the
+~6 ms of earlier notes is the RX 7800 XT. `NX_SAME_RT=0` changes nothing here. bench.ps1 needs its 135 s (the
+scene starts 30-100 s in).
+
+Not done, ranked from the comparison:
+1. Draw translation (the render thread's ~1.7 us a draw): skip `set_dynamic_state` / `set_vertex_input` with a
+   state generation bumped by every setter (TotK `bind_sig`, a check mode that builds anyway and compares);
+   cache descriptor-set lookups and `gpu_buffer_ro` per slot; fill `VkWriteDescriptorSet` only on a miss.
+2. PGO (TotK: +6-12% a frame; docs/pgo.md): clang-cl with /clang:-fprofile-generate and clang_rt.profile, profraw
+   written on a timer and at exit. Lifted code is not what limits Violet now, but the runtime gains too.
+3. Recorder thread for vkCmd* (TotK vk_rec.c, -17% on the replay thread; AMD hangs fixed once the recorder also
+   begins, ends and submits its parts). Measure the driver's share of a draw first.
+4. Lifter: store only registers changed since the last store before a call (TotK regs.py), flag-kind dataflow
+   across labels (flags.py). Small.
+5. GPU: TotK's design is the same as ours (GENERAL layouts, LOAD/STORE, full barriers), so it does not explain the
+   GPU time. Its UpdateUniformBuffer overlay matters only if OP_UPDATE_UBO ends passes here (count with
+   NX_GPU_PROF); barrier dedup (skip one when nothing was recorded since the last) is cheap.
+6. Kernel: priority inheritance for guest mutexes and no async preemption inside SDK spin locks (TLR+0x100),
+   spin-wait gates found by a loop scan (tools/spin_waits.py); profile first.

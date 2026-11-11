@@ -20,7 +20,7 @@ From the workspace root (`..\start.ps1` wraps the scripts in `violetrecomp\`, wh
 | Join a room directly | `.\start.ps1 violet -Room 127.0.0.1:24872 -Nick Host` (the game starts offline otherwise; the old start-up browser: `NX_ROOM_BROWSER=1`) |
 | A real Switch in the room | `.\start.ps1 beacon` (ESP32-S3 on USB; see `../ldn-beacon/CLAUDE.md`) |
 | A folder for players | `.\start.ps1 package violet <dir>` (nxrecomp `tools\package.ps1`; `-PythonZip` / `-ShaderPack`) |
-| Stand-still benchmark | `violetrecomp\bench.ps1 <name> [NAME=value ...]` (~140 s, hands off; `-Summary`) |
+| Stand-still benchmark | `violetrecomp\bench.ps1 <name> [NAME=value ...]` (~140 s, hands off; `-Summary`; 60 s was tried 2026-11-11 and ends before the scene settles) |
 | New shaders (dumped as the game reaches them) | `python ..\nxrecomp\tools\shader\translate.py --spv` from `violetrecomp\`, then run again |
 
 Never script input (`NX_INPUT`, pressing A) unless the user asks; bench.ps1 passes `NX_INPUT=` empty.
