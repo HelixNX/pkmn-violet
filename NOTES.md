@@ -1572,7 +1572,7 @@ the transition time, or "Game's own" (reset). Through host->run_script (lua.c), 
   (`python ..\..\nxrecomp\tools\lifter\a64lift.py lift ..\build\lifted` from violetrecomp\, 12 min, then a 20 min
   build). The build gives no warning when patches.txt is newer than the lift.
 
-## Eggs and trainer ids in F8 (2026-11-11; mod built, NOT yet tried in game; svedit changes NOT compiled)
+## Eggs and trainer ids in F8 (2026-11-11; eggs PKHeX-legal offline, NOT yet tried in game)
 
 Asked: eggs in the spawn menu, a separate trainer ID / secret ID, any legal IVs (no EVs), the right egg format and PID,
 a way to see a mon's TID / SID in game, natures etc., egg progress (trade it, walk a few steps, it hatches).
@@ -1595,14 +1595,19 @@ a way to see a mon's TID / SID in game, natures etc., egg progress (trade it, wa
 - **Trainers tab:** "Read the boxes" lists every boxed mon with OT, ID No. / SID (or 16-bit), game, shiny; "Only
   other trainers"; per row "Hatcher" (eggs shiny for that trainer) and "OT". So: a friend trades you any mon, read
   their ids off it, make the egg, trade it back, they hatch it shiny. Party mons are not listed (box only).
-- **Unsure, left to PKHeX:** the nickname flag on an unhatched SV egg (we think set) and whether relearn moves are
-  empty or the egg's moves. `svedit monsdata` now writes `mons_eggs.txt` by building each egg with these rules,
-  trying the four flag / relearn variants and keeping the first PKHeX's LegalityAnalysis passes (prints the counts;
-  prints the report if Bulbasaur, Eevee or Sprigatito fail = our rules are wrong). The mod copies the flag, moves
-  and relearn moves from that file, so it follows whatever PKHeX accepted. Also unchecked: whether 0 or 1 cycles left
-  pass PKHeX (1 is what an egg walked nearly to the end shows), how far 1 cycle is to walk in SV.
-- **To do on the machine with .NET 9:** compile svedit (written blind: `LearnSource9SV.Instance.GetLearnset(n,
-  f).GetBaseEggMoves(1)`, `SpeciesName.GetEggName(lang, 9)`, `Breeding.CanHatchAsEgg(n)`, `pi.HatchCycles` /
-  `EggGroup1` are from memory of PKHeX's API), run `monsdata`, then in game: Egg tab, make one, `check` a dumped
-  copy (or `mons_egg_selftest(cache, out, national, form, ot_id32, hatcher_id32, cycles)` from Python ctypes) with
-  `check <main> <pk9> <ID No.> <SID>`, then hatch one, and trade one to a second instance and hatch it there.
+- **Checked against PKHeX 26.10.18 (same day, after svedit moved to .NET 11):** the rules found by building eggs
+  in svedit and reading LegalityAnalysis: relearn moves must equal the egg's moves; the nickname flag must be set;
+  an unhatched egg has NO met date (only the egg date); the nickname buffer is the egg name written over the species
+  name (the leftover characters are "expected trash bytes"); 0 cycles left fails ("Invalid Egg hatch cycles"), 1 is
+  legal; Master and Cherish Ball fail for an egg; Tera must be one of the species' types; hidden ability, any IVs,
+  any size, square or star shiny, shiny for another trainer all pass. Babies (Pichu, Happiny, Riolu) are in the
+  Undiscovered egg group yet hatch: no egg-group filter. `monsdata` writes 329 egg species / forms (balls allowed
+  per species as a mask, the nickname buffer in the save's language). End to end: the mod's `mons_egg_selftest`
+  with the real tables, then svedit `check`: Sprigatito, Eevee (shiny for the given hatcher only), Pichu, Paldean
+  Tauros legal; a 0-cycle Tinkatink fails as the popup says. A custom OT in another language than the save's gets
+  the egg name over zeros (that language's trash is unknown: may fail PKHeX's trash check).
+- svedit on PKHeX 26: `StatNature` is `StatAlignment`, `EncryptedPartyData` is `WriteEncryptedDataParty(span)`,
+  `IVs` is set-only (`GetIVs` / `SetIVs`), the bag lists `.Pouches`. svedit's save path is
+  `build\save\1-000000000000000100006d6b38726563-0\main`.
+- **Left to try in game:** make an egg, hatch it (how far 1 cycle is), trade one to a second instance and hatch it
+  there.

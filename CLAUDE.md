@@ -44,7 +44,7 @@ back to the game's own). Sources `mods\<name>\`, shared `mods\common\`. Their da
 
 **Saves:** the game's save is `build\save\`; backups and test saves are in `build\saves\` (`save-backup-<date>`,
 `save-net-a` / `-b` for two instances in one room, ...). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game
-edits: `violetrecomp\tools\svedit` (.NET 9 + PKHeX.Core; back up `build\save` first): ride upgrades, raid levels,
+edits: `violetrecomp\tools\svedit` (.NET 11 SDK + PKHeX.Core 26.10.18; back up `build\save` first): ride upgrades, raid levels,
 `addmon`, `dump`, ...
 
 **Switches** (read once at boot): `NX_ROOM`, `NX_NICK`, `NX_ROOM_BROWSER=1`, `NX_MODS=0`, `NX_RES_SCALE`, `NX_FPS=0`,
@@ -77,8 +77,8 @@ edits: `violetrecomp\tools\svedit` (.NET 9 + PKHeX.Core; back up `build\save` fi
    a child in a job object so it stops with the game, joins 127.0.0.1 and shows the LAN address; friends outside the
    network still need the port forwarded or a tunnel). Also later: the whole room server on the ESP32 with the beacon
    (../ldn-beacon/CLAUDE.md, Open).
-1. **F8 eggs (2026-11-11; built, svedit's part not compiled):** compile svedit on the .NET 9 machine, `monsdata`
-   (writes `mons_eggs.txt`, checked by PKHeX), then make, check and hatch an egg; trade one to a second instance.
+1. **F8 eggs (2026-11-11; built, eggs PKHeX-legal offline, not yet tried in game):** make one in game (Egg tab),
+   hatch it; trade one to a second instance and hatch it there (shiny for that trainer?).
    NOTES.md, "Eggs and trainer ids in F8".
    Try the F8 changes above; confirm the wild spec on a caught mon (overworld shiny vs battle shiny).
 2. Spawn-pool rules: wrap the encounter table's filter / per-entry rules (version, time, flags, weights; F8 weights

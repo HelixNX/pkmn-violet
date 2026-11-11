@@ -1,14 +1,15 @@
 /* Eggs and trainer ids: the "Egg" and "Trainers" tabs of the "Spawn a Pokemon" window (violet_mons.dll).
  *
- * Egg: an unhatched egg written into the first free box slot, made the way an egg from a picnic basket is (PKHeX's Gen 9
- * egg rules; the per-species facts come from PKHeX itself, see below):
+ * Egg: an unhatched egg written into the first free box slot, as PKHeX 26.10.18's legality check holds an unhatched SV
+ * egg (checked 2026-11-11 against this save with svedit; the per-species facts come from PKHeX, see below):
  *   level 1 (EXP of level 1), met level 1, obedience 1; egg location 30023 (picnic), met location 0 (none until it
- *   hatches; a trade sets 30002 itself); egg and met date today; nickname the egg name in the OT's language, egg flag
- *   (IV32 bit 30) and the nickname flag as PKHeX expects it; EVs 0, no held item; the species' level-1 moves and the
- *   relearn moves PKHeX accepts; OT friendship = the hatch counter (egg cycles left); Tera type one of the species'
- *   own types; height / weight / scale random.
- * Free choices, as breeding allows: IVs (any 0-31: 3 or 5 inherited, the rest random), nature (Everstone), ability
- * incl. hidden, gender, ball (Master Ball too in Gen 9; never Cherish), Tera type of the species' two, shiny.
+ *   hatches; a trade sets 30002 itself); egg date today and NO met date (a met date fails); egg flag (IV32 bit 30) and
+ *   the nickname flag (must be set); nickname: the egg name written over the species name, the rest of which stays
+ *   as the expected trash; EVs 0, no held item; the species' level-1 moves, relearn moves the same; OT friendship =
+ *   the hatch counter (egg cycles left, 1 or more: 0 fails); Tera type one of the species' own types; height / weight
+ *   / scale random.
+ * Free choices, as breeding allows: IVs (any 0-31), nature, ability incl. hidden, gender, ball (those PKHeX allows for
+ * the species: never Master or Cherish), Tera type of the species' two, shiny.
  *
  * Shiny: an egg's PID is fixed when it is made; whether it hatches shiny is checked against whoever hatches it (a traded
  * egg takes its hatcher as OT). "Shiny for" picks that trainer: its ids are read off a mon it traded you (Trainers
@@ -17,7 +18,8 @@
  *
  * Per-species data: <build>\mods\mons_eggs.txt (svedit monsdata): one row per species / form PKHeX lets hatch from an
  * egg in SV (it builds each egg with these rules and keeps only those its legality check passes):
- *   national  form  hatch cycles  nickname flag  move1..4  relearn1..4
+ *   national  form  hatch cycles  nickname flag  move1..4  relearn1..4  ball mask (hex, bit = ball id)  nickname
+ *   buffer (26 bytes hex, in the save's language; another language gets its egg name over zeros: its trash unknown)
  * svedit `check` reads an egg we wrote (mons_egg_selftest, or dumped) back with PKHeX and its legality report. */
 #include "mons.h"
 #include <random>
@@ -29,7 +31,7 @@ using namespace mons;
 
 namespace {
 
-struct EggRow { u16 national, form; u8 cycles; bool nickflag; u16 moves[4], relearn[4]; int species = -1; };
+struct EggRow { u16 national, form; u8 cycles; bool nickflag; u16 moves[4], relearn[4]; u64 balls; u8 nick[26]; bool has_nick; int species = -1; };
 std::vector<EggRow> g_eggs;
 std::string g_egg_error;
 
@@ -83,7 +85,7 @@ bool build_egg(const void *ctx, const Trainer &save_t, u8 *d, std::string &msg) 
     const Species &s = g_species[job.species];
     const EggRow *row = egg_row(job.species);
     if (!row) { msg = s.label + " does not hatch from an egg."; return false; }
-    if (e.ball == 16) { msg = "No egg comes in a Cherish Ball."; return false; }
+    if (!(row->balls >> e.ball & 1)) { msg = "No " + s.name + " egg comes in that ball."; return false; }
     Trainer t = save_t;
     if (e.custom_ot) {
         if (!e.ot_name[0]) { msg = "Give the custom OT a name."; return false; }
@@ -115,7 +117,8 @@ bool build_egg(const void *ctx, const Trainer &save_t, u8 *d, std::string &msg) 
     d[O_GENDER] = (u8)(gender << 1);
     wr16(d + O_FORM, s.form);
     d[O_HEIGHT] = (u8)rng(); d[O_WEIGHT] = (u8)rng(); d[O_SCALE] = (u8)rng();
-    put_name16(d + O_NICK, egg_name(t.language));
+    if (row->has_nick && (!g_save_trainer.ok || t.language == g_save_trainer.language)) memcpy(d + O_NICK, row->nick, 26);
+    else put_name16(d + O_NICK, egg_name(t.language));
     for (int i = 0; i < 4; i++) {
         wr16(d + O_MOVES + 2 * i, row->moves[i]);
         u8 pp = 0;
@@ -132,14 +135,13 @@ bool build_egg(const void *ctx, const Trainer &save_t, u8 *d, std::string &msg) 
     d[O_RIBBON] = 0xFF;
     d[O_LANGUAGE] = t.language;
     memcpy(d + O_OT_NAME, t.name, 26);
-    int cyc = e.cycles < 0 || e.cycles > row->cycles ? row->cycles : e.cycles;
+    int cyc = e.cycles < 0 || e.cycles > row->cycles ? row->cycles : e.cycles;     /* 0 only when asked (popup) */
     d[O_OT_FRIENDSHIP] = (u8)cyc;
     time_t now = time(nullptr);
     struct tm tm;
     localtime_s(&tm, &now);
     u8 date[3] = {(u8)(tm.tm_year - 100), (u8)(tm.tm_mon + 1), (u8)tm.tm_mday};
-    memcpy(d + O_EGG_DATE, date, 3);
-    memcpy(d + O_MET_DATE, date, 3);
+    memcpy(d + O_EGG_DATE, date, 3);                /* the met date stays empty until it hatches */
     d[O_OBEDIENCE] = 1;
     wr16(d + O_EGG_LOCATION, 30023);               /* picnic */
     wr16(d + O_MET_LOCATION, 0);
@@ -247,11 +249,16 @@ void egg_init(const char *cache_dir) {
     auto rows = read_tsv(std::string(cache_dir) + "\\mods\\mons_eggs.txt");
     g_error = keep;
     for (auto &r : rows) {
-        if (r.size() < 12 || r[0].empty() || r[0][0] == '#') continue;
+        if (r.size() < 13 || r[0].empty() || r[0][0] == '#') continue;
         EggRow e = {};
         e.national = (u16)atoi(r[0].c_str()); e.form = (u16)atoi(r[1].c_str());
         e.cycles = (u8)atoi(r[2].c_str()); e.nickflag = atoi(r[3].c_str()) != 0;
         for (int i = 0; i < 4; i++) { e.moves[i] = (u16)atoi(r[4 + i].c_str()); e.relearn[i] = (u16)atoi(r[8 + i].c_str()); }
+        e.balls = strtoull(r[12].c_str(), nullptr, 16);
+        if (r.size() > 13 && r[13].size() == 52) {
+            e.has_nick = true;
+            for (int i = 0; i < 26; i++) e.nick[i] = (u8)strtoul(r[13].substr(2 * i, 2).c_str(), nullptr, 16);
+        }
         for (size_t i = 0; i < g_species.size(); i++)
             if (g_species[i].national == e.national && g_species[i].form == e.form) e.species = (int)i;
         if (e.species >= 0) g_eggs.push_back(e);
@@ -312,11 +319,12 @@ void egg_ui(int &species_index) {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160);
     {
+        if (!(row->balls >> e.ball & 1)) e.ball = 4;            /* this species: not that ball */
         const char *bn = "?";
         for (auto &b : g_balls) if (b.first == e.ball) bn = b.second.c_str();
         if (fc_egg_ball.begin("Ball", bn)) {
             for (auto &b : g_balls)
-                if (b.first != 16 && fc_egg_ball.item(b.second.c_str(), b.first == e.ball)) e.ball = b.first;
+                if ((row->balls >> b.first & 1) && fc_egg_ball.item(b.second.c_str(), b.first == e.ball)) e.ball = b.first;
             fc_egg_ball.end();
         }
     }
@@ -348,11 +356,14 @@ void egg_ui(int &species_index) {
         int full = row->cycles;
         int c = e.cycles < 0 ? full : e.cycles > full ? full : e.cycles;
         ImGui::SetNextItemWidth(200);
-        if (ImGui::SliderInt("Egg cycles left", &c, 0, full)) e.cycles = c;
+        if (ImGui::SliderInt("Egg cycles left", &c, 1, full)) e.cycles = c;
         ImGui::SameLine();
         if (ImGui::SmallButton("Almost ready")) e.cycles = 1;
         ImGui::SameLine();
         if (ImGui::SmallButton("Fresh")) e.cycles = -1;
+        ImGui::SameLine();
+        if (ImGui::SmallButton("0")) e.cycles = 0;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Asks first: PKHeX calls 0 illegal");
         ImGui::TextDisabled("Fresh: %d cycles. At 1 it hatches after a short walk (the trade keeps the count).", full);
     }
 
@@ -402,9 +413,8 @@ void egg_ui(int &species_index) {
     }
     if (ask_zero) { ImGui::OpenPopup("Egg cycles 0"); ask_zero = false; }
     if (ImGui::BeginPopupModal("Egg cycles 0", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("0 cycles left: the egg hatches at the game's next egg cycle.\n"
-                               "A walked egg normally shows 1 or more; legality checkers may flag 0.\n"
-                               "1 hatches almost as soon and looks like an egg walked nearly to the end.");
+        ImGui::TextUnformatted("0 cycles left: PKHeX flags this egg as illegal (\"Invalid Egg hatch cycles\").\n"
+                               "1 is legal, looks like an egg walked nearly to the end, and hatches almost as soon.");
         if (ImGui::Button("Make it with 1")) {
             e.cycles = 1;
             EggJob job = {species_index, e};
@@ -514,6 +524,7 @@ extern "C" __declspec(dllexport) int mons_egg_selftest(const char *cache_dir, co
     Trainer t;
     put_name(t.name, "Tester");
     t.tid = (u16)ot_id; t.sid = (u16)(ot_id >> 16);
+    if (g_save_trainer.ok) { t.language = g_save_trainer.language; t.version = g_save_trainer.version; }
     t.ok = true;
     u8 dec[SLOT], enc[SLOT], back[SLOT];
     std::string msg;

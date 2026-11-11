@@ -1,4 +1,4 @@
-// svedit: Scarlet / Violet save edits through PKHeX.Core (NuGet, 25.12.21: the last release for .NET 9). The game must
+﻿// svedit: Scarlet / Violet save edits through PKHeX.Core (NuGet 26.10.18 on .NET 11; was 25.12.21 on .NET 9 until 2026-11-11). The game must
 // be closed: it saves over the file otherwise. Back the save folder up first.
 //
 //   dotnet run -- flags <save>\main <key hex>...   turn boolean save flags on (SCBlock keys, PKHeX's
@@ -48,7 +48,7 @@ switch (args[0])
             [InventoryType.Items] = 4, [InventoryType.TMHMs] = 5, [InventoryType.Treasure] = 6, [InventoryType.Ingredients] = 7,
             [InventoryType.KeyItems] = 8, [InventoryType.Candy] = 9 };
         var lines = new List<string>();
-        foreach (var p in sav.Inventory)
+        foreach (var p in sav.Inventory.Pouches)
             foreach (var id in p.GetAllItems())
                 lines.Add($"{id}\t{pocket[p.Type]}\t{GameInfo.Strings.Item[id]}");
         File.WriteAllLines(args[2], lines);
@@ -83,7 +83,7 @@ switch (args[0])
         pk.CurrentLevel = byte.Parse(args[3]);
         var nature = Enum.Parse<Nature>(args[4], true);
         pk.Nature = nature;
-        pk.StatNature = nature;
+        pk.StatAlignment = nature;
         pk.SetAbilityIndex(int.Parse(args[5]));
         pk.Gender = pk.GetSaneGender();
         pk.Nickname = args[6];
@@ -91,7 +91,7 @@ switch (args[0])
         var moves = args[7].Split(',').Select(m => (ushort)Find(s.Move, m.Trim(), "move")).ToArray();
         pk.SetMoves(moves);
         pk.SetMaximumPPCurrent(moves);
-        pk.IVs = [31, 31, 31, 31, 31, 31];
+        pk.SetIVs([31, 31, 31, 31, 31, 31]);
         var ev = args[8].Split('/').Select(int.Parse).ToArray();   // hp atk def spa spd spe
         pk.EV_HP = ev[0]; pk.EV_ATK = ev[1]; pk.EV_DEF = ev[2]; pk.EV_SPA = ev[3]; pk.EV_SPD = ev[4]; pk.EV_SPE = ev[5];
         pk.TeraTypeOriginal = (MoveType)pi.Type1;
@@ -117,7 +117,7 @@ switch (args[0])
             Console.WriteLine($"party full: box {slot / sav.BoxSlotCount + 1}, slot {slot % sav.BoxSlotCount + 1}");
         }
         Console.WriteLine($"{s.Species[species]} \"{pk.Nickname}\" Lv {pk.CurrentLevel} {pk.Nature} {s.Ability[pk.Ability]} " +
-                          $"IVs {string.Join('/', pk.IVs)} EVs {pk.EV_HP}/{pk.EV_ATK}/{pk.EV_DEF}/{pk.EV_SPA}/{pk.EV_SPD}/{pk.EV_SPE} " +
+                          $"IVs {string.Join('/', IVs(pk))} EVs {pk.EV_HP}/{pk.EV_ATK}/{pk.EV_DEF}/{pk.EV_SPA}/{pk.EV_SPD}/{pk.EV_SPE} " +
                           $"moves {string.Join(", ", pk.Moves.Select(m => s.Move[m]))} stats {pk.Stat_HPMax}/{pk.Stat_ATK}/{pk.Stat_DEF}/{pk.Stat_SPA}/{pk.Stat_SPD}/{pk.Stat_SPE}");
         File.WriteAllBytes(path, sav.Write().ToArray());
         var check = (SAV9SV)SaveUtil.GetSaveFile(path)!;
@@ -135,7 +135,7 @@ switch (args[0])
         Console.WriteLine($"party0 {GameInfo.Strings.Species[p.Species]} raw species {BitConverter.ToUInt16(p.Data[8..])} " +
                           $"EC {p.EncryptionConstant:X8} ver {p.Version} {(int)p.Version} lang {p.Language} loc {p.MetLocation}");
         File.WriteAllBytes(args[2] + ".dec", p.Data.ToArray());
-        File.WriteAllBytes(args[2] + ".enc", p.EncryptedPartyData);
+        File.WriteAllBytes(args[2] + ".enc", EncParty(p));
         return 0;
     }
     case "monsdata":
@@ -160,16 +160,19 @@ switch (args[0])
             }
         }
         File.WriteAllLines(Path.Combine(dir, "mons_species.txt"), sp);
-        // mons_eggs.txt, for the mod's Egg tab: each species / form PKHeX lets hatch from an egg in SV, with the facts the
-        // mod copies (national form cycles nickflag move1..4 relearn1..4). Each egg is built here with the mod's rules
-        // (egg.cpp's header) and kept only if PKHeX's legality check passes; the flag / relearn variants are tried in
-        // turn and the counts printed, so a PKHeX rule we got wrong shows up here.
+        // mons_eggs.txt, for the mod's Egg tab: each species / form that hatches from an egg in SV, with the facts the mod
+        // copies. Each egg is built here with the rules PKHeX 26.10.18's legality check holds an unhatched SV egg to
+        // (found 2026-11-11 with this save): the species' level-1 moves (the last four), relearn moves = those moves,
+        // nickname flag set, the nickname buffer the species name with the egg name written over it (the rest is the
+        // expected trash), egg date today and no met date, met location 0, egg location 30023 (picnic), level / met
+        // level / obedience 1, Tera one of the species' types, hatch counter 1..its cycles (0 fails), never a Master or
+        // Cherish Ball. Kept only if the check passes; each ball is tried too (the mask lists those it allows).
+        //   national form cycles nickflag move1..4 relearn1..4 ballmask(hex, bit = ball id) nickname(26 bytes hex, the
+        //   save's language)
         var eggs = new List<string>();
-        var variants = new (bool nick, bool relearn)[] { (true, false), (true, true), (false, false), (false, true) };
-        var wins = new int[variants.Length];
         int eggFail = 0;
         var today = DateOnly.FromDateTime(DateTime.Now);
-        PK9 MakeEgg(ushort n, byte f, bool nick, bool relearnSame)
+        PK9 MakeEgg(ushort n, byte f)
         {
             var pi = PersonalTable.SV.GetFormEntry(n, f);
             var pk = new PK9 { Species = n, Form = f };
@@ -182,28 +185,26 @@ switch (args[0])
             pk.ID32 = sav.ID32;
             pk.CurrentLevel = 1;
             pk.Nature = Nature.Hardy;
-            pk.StatNature = Nature.Hardy;
+            pk.StatAlignment = Nature.Hardy;
             pk.SetAbilityIndex(0);
             pk.Gender = pk.GetSaneGender();
-            pk.IVs = [31, 31, 31, 31, 31, 31];
-            var moves = LearnSource9SV.Instance.GetLearnset(n, f).GetBaseEggMoves(1).ToArray();
+            pk.SetIVs([31, 31, 31, 31, 31, 31]);
+            var all = LearnSource9SV.Instance.GetLearnset(n, f).GetBaseEggMoves(1).ToArray();
+            var moves = new ushort[4];
+            all.AsSpan(0, Math.Min(4, all.Length)).CopyTo(moves);
             pk.SetMoves(moves);
             pk.HealPP();
-            if (relearnSame)
-            {
-                var r = new ushort[4];
-                moves.AsSpan(0, Math.Min(4, moves.Length)).CopyTo(r);
-                pk.RelearnMove1 = r[0]; pk.RelearnMove2 = r[1]; pk.RelearnMove3 = r[2]; pk.RelearnMove4 = r[3];
-            }
+            pk.RelearnMove1 = moves[0]; pk.RelearnMove2 = moves[1]; pk.RelearnMove3 = moves[2]; pk.RelearnMove4 = moves[3];
+            pk.Nickname = SpeciesName.GetSpeciesNameGeneration(n, pk.Language, 9);     // under the egg name: the trash
             pk.IsEgg = true;
             pk.Nickname = SpeciesName.GetEggName(pk.Language, 9);
-            pk.IsNicknamed = nick;
+            pk.IsNicknamed = true;
             pk.OriginalTrainerFriendship = (byte)pi.HatchCycles;
             pk.MetLevel = 1;
             pk.MetLocation = 0;
             pk.EggLocation = 30023;                 // picnic
-            pk.MetDate = today;
             pk.EggMetDate = today;
+            pk.MetDate = null;
             pk.ObedienceLevel = 1;
             pk.Ball = (byte)Ball.Poke;
             pk.TeraTypeOriginal = (MoveType)pi.Type1;
@@ -221,34 +222,35 @@ switch (args[0])
             for (byte f = 0; f < count; f++)
             {
                 var pi = PersonalTable.SV.GetFormEntry(n, f);
-                if (!pi.IsPresentInGame || pi.HatchCycles == 0 || pi.EggGroup1 == 15) continue;     // 15: Undiscovered
+                if (!pi.IsPresentInGame || pi.HatchCycles == 0) continue;     // babies are Undiscovered yet hatch: no egg group test
                 if (!Breeding.CanHatchAsEgg(n)) continue;
-                PK9? ok = null;
-                string? report = null;
-                for (int v = 0; v < variants.Length && ok == null; v++)
-                {
-                    var pk = MakeEgg(n, f, variants[v].nick, variants[v].relearn);
-                    var la = new LegalityAnalysis(pk);
-                    if (la.Valid) { ok = pk; wins[v]++; }
-                    else report ??= la.Report();
-                }
-                if (ok == null)
+                var pk = MakeEgg(n, f);
+                var la = new LegalityAnalysis(pk);
+                if (!la.Valid)
                 {
                     // most fail for a reason of their own (not a first stage, a form that only comes from evolving);
-                    // these three surely hatch, so a failure there is our rules' fault: its report says which
+                    // these three surely hatch, so a failure there is the rules' fault: its report says which
                     eggFail++;
-                    if (n is 1 or 133 or 906 && f == 0) Console.WriteLine($"egg {s.Species[n]}: NOT LEGAL as built (fix the rules):\n{report}");
+                    if (n is 1 or 133 or 906 && f == 0) Console.WriteLine($"egg {s.Species[n]}: NOT LEGAL as built (fix the rules):\n{la.Report()}");
                     continue;
                 }
-                var mv = new[] { ok.Move1, ok.Move2, ok.Move3, ok.Move4 };
-                var rl = new[] { ok.RelearnMove1, ok.RelearnMove2, ok.RelearnMove3, ok.RelearnMove4 };
-                eggs.Add(string.Join('\t', new object[] { n, f, ok.OriginalTrainerFriendship, ok.IsNicknamed ? 1 : 0 }
-                    .Concat(mv.Select(m => (object)m)).Concat(rl.Select(m => (object)m))));
+                ulong ballMask = 0;
+                for (int b = 1; b < Math.Min(64, s.balllist.Length); b++)
+                {
+                    if (string.IsNullOrEmpty(s.balllist[b])) continue;
+                    pk.Ball = (byte)b;
+                    pk.RefreshChecksum();
+                    if (new LegalityAnalysis(pk).Valid) ballMask |= 1ul << b;
+                }
+                var em = new[] { pk.Move1, pk.Move2, pk.Move3, pk.Move4 };
+                var rl = new[] { pk.RelearnMove1, pk.RelearnMove2, pk.RelearnMove3, pk.RelearnMove4 };
+                eggs.Add(string.Join('\t', new object[] { n, f, pi.HatchCycles, pk.IsNicknamed ? 1 : 0 }
+                    .Concat(em.Select(m => (object)m)).Concat(rl.Select(m => (object)m))
+                    .Append(ballMask.ToString("X")).Append(Convert.ToHexString(pk.Data.Slice(0x58, 26)))));
             }
         }
         File.WriteAllLines(Path.Combine(dir, "mons_eggs.txt"), eggs);
-        Console.WriteLine($"{eggs.Count} egg species/forms ({eggFail} not legal as eggs); variants nickname flag / relearn = moves: " +
-                          string.Join(", ", variants.Select((v, i) => $"{(v.nick ? "nick" : "no nick")}/{(v.relearn ? "relearn" : "no relearn")} {wins[i]}")));
+        Console.WriteLine($"{eggs.Count} egg species/forms ({eggFail} more not legal as eggs)");
         var mv = new List<string>();
         var dummied = MoveInfo.GetDummiedMovesHashSet(EntityContext.Gen9);
         for (ushort m = 1; m < s.Move.Count; m++)
@@ -276,7 +278,7 @@ switch (args[0])
             ("EC", p => p.EncryptionConstant = 0xA1B2C3D4), ("PID", p => p.PID = 0xA1B2C3D4), ("Species", p => p.Species = 956),
             ("HeldItem", p => p.HeldItem = 0x123), ("TID16", p => p.TID16 = 0x1234), ("SID16", p => p.SID16 = 0x5678),
             ("EXP", p => p.EXP = 0x123456), ("Ability", p => p.Ability = 0x1FF), ("AbilityNumber", p => p.AbilityNumber = 4),
-            ("Nature", p => p.Nature = Nature.Modest), ("StatNature", p => p.StatNature = Nature.Modest),
+            ("Nature", p => p.Nature = Nature.Modest), ("StatNature", p => p.StatAlignment = Nature.Modest),
             ("Gender", p => p.Gender = 1), ("Form", p => p.Form = 3), ("FatefulEncounter", p => p.FatefulEncounter = true),
             ("EV_HP", p => p.EV_HP = 0xF1), ("EV_ATK", p => p.EV_ATK = 0xF2), ("EV_DEF", p => p.EV_DEF = 0xF3),
             ("EV_SPE", p => p.EV_SPE = 0xF4), ("EV_SPA", p => p.EV_SPA = 0xF5), ("EV_SPD", p => p.EV_SPD = 0xF6),
@@ -304,10 +306,10 @@ switch (args[0])
             Console.WriteLine($"{name}: {string.Join(' ', ch)}");
         }
         var b = new PK9(); b.Species = 956; b.RefreshChecksum();
-        Console.WriteLine($"blank+species checksum {b.Checksum:X4} size {b.Data.Length:X} enc {Convert.ToHexString(b.EncryptedPartyData[..16])}");
+        Console.WriteLine($"blank+species checksum {b.Checksum:X4} size {b.Data.Length:X} enc {Convert.ToHexString(EncParty(b)[..16])}");
         // crypto check vectors: decrypted with EC = 0x853A6302 and a marker per 0x50 block
         var c = new PK9(); c.EncryptionConstant = 0x853A6302; for (int k = 0; k < 4; k++) c.Data[8 + 0x50 * k] = (byte)(0xB0 + k);
-        File.WriteAllBytes(args[2] + ".vdec", c.Data.ToArray()); File.WriteAllBytes(args[2] + ".venc", c.EncryptedPartyData);
+        File.WriteAllBytes(args[2] + ".vdec", c.Data.ToArray()); File.WriteAllBytes(args[2] + ".venc", EncParty(c));
         return 0;
     }
     case "check":
@@ -316,8 +318,8 @@ switch (args[0])
         var pk = new PK9(File.ReadAllBytes(args[2]));
         var s = GameInfo.Strings;
         Console.WriteLine($"checksum {(pk.ChecksumValid ? "ok" : "BAD")} species {s.Species[pk.Species]} form {pk.Form} lv {pk.CurrentLevel} " +
-                          $"\"{pk.Nickname}\" nick {pk.IsNicknamed} {pk.Nature}/{pk.StatNature} ability {s.Ability[pk.Ability]} ({pk.AbilityNumber}) " +
-                          $"gender {pk.Gender} shiny {pk.IsShiny} IVs {string.Join('/', pk.IVs)} EVs {pk.EV_HP}/{pk.EV_ATK}/{pk.EV_DEF}/{pk.EV_SPA}/{pk.EV_SPD}/{pk.EV_SPE} " +
+                          $"\"{pk.Nickname}\" nick {pk.IsNicknamed} {pk.Nature}/{pk.StatAlignment} ability {s.Ability[pk.Ability]} ({pk.AbilityNumber}) " +
+                          $"gender {pk.Gender} shiny {pk.IsShiny} IVs {string.Join('/', IVs(pk))} EVs {pk.EV_HP}/{pk.EV_ATK}/{pk.EV_DEF}/{pk.EV_SPA}/{pk.EV_SPD}/{pk.EV_SPE} " +
                           $"moves {string.Join(", ", pk.Moves.Select(m => s.Move[m]))} PP {pk.Move1_PP}/{pk.Move2_PP}/{pk.Move3_PP}/{pk.Move4_PP} " +
                           $"OT {pk.OriginalTrainerName} {pk.TID16}/{pk.SID16} ball {pk.Ball} tera {pk.TeraTypeOriginal} lang {pk.Language} ver {pk.Version} " +
                           $"met {pk.MetLocation} lv{pk.MetLevel} {pk.MetDate} stats {pk.Stat_HPMax}/{pk.Stat_ATK}/{pk.Stat_SPA} party level {pk.Stat_Level}");
@@ -395,3 +397,6 @@ switch (args[0])
 }
 Console.Error.WriteLine("unknown command " + args[0]);
 return 1;
+
+static byte[] EncParty(PKM p) { var b = new byte[p.SIZE_PARTY]; p.WriteEncryptedDataParty(b); return b; }
+static int[] IVs(PKM p) { var a = new int[6]; p.GetIVs(a); return a; }
