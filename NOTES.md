@@ -1632,6 +1632,9 @@ Bench on this laptop: the stand-still scene is ~14 ms (70-80 fps), GPU busy 9.4,
 submission's start, 2.3-3.0 between its flushes; pool mirrors are on here, PCIe 15.8 GB/s). Not a regression: the
 ~6 ms of earlier notes is the RX 7800 XT. `NX_SAME_RT=0` changes nothing here. bench.ps1 needs its 135 s (the
 scene starts 30-100 s in).
+bench.ps1's scripted A (`300-900/60:A`) ended before this laptop's title took input (~frame 1,800-2,400 here,
+~2-3 s into the run at 900): the runs waited for a hand on A. Now `300-4000/60:A`; a run with NX_INPUT_LOG=1
+reached the scene unattended.
 
 Not done, ranked from the comparison:
 1. Draw translation (the render thread's ~1.7 us a draw): skip `set_dynamic_state` / `set_vertex_input` with a

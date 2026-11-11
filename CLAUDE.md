@@ -23,7 +23,9 @@ From the workspace root (`..\start.ps1` wraps the scripts in `violetrecomp\`, wh
 | Stand-still benchmark | `violetrecomp\bench.ps1 <name> [NAME=value ...]` (~140 s, hands off; `-Summary`; 60 s was tried 2026-11-11 and ends before the scene settles) |
 | New shaders (dumped as the game reaches them) | `python ..\nxrecomp\tools\shader\translate.py --spv` from `violetrecomp\`, then run again |
 
-Never script input (`NX_INPUT`, pressing A) unless the user asks; bench.ps1 passes `NX_INPUT=` empty.
+Never script input (`NX_INPUT`, pressing A) unless the user asks. bench.ps1 presses A through the title
+(`NX_INPUT=300-4000/60:A`, every 60 presented frames; asked 2026-11-11): the GTX 1650 Ti laptop's title takes input
+only after ~frame 1,800 (`300-900` ended before it), and the presses left in the scene do nothing there.
 
 **In game:** Esc frees the mouse and shows the menu bar at the top (it fades in on mouse movement; F1 pins it; a
 click on the game hides it): **Options** > Video (frame rate, render scale, FPS counter, borderless fullscreen;

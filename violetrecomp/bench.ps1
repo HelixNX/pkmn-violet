@@ -11,7 +11,7 @@ $log = "$b\bench_$Name.log"
 if (-not $Summary) {
     if (Test-Path "$b\save-idle-run") { Remove-Item -Recurse -Force -Confirm:$false "$b\save-idle-run" }
     Copy-Item -Recurse "$b\save" "$b\save-idle-run"
-    $set = @{ NX_NOPACE = '1'; NX_TIME = '1792494000'; NX_INPUT = '300-900/60:A'; NX_GPU_TIMELINE = '1' }
+    $set = @{ NX_NOPACE = '1'; NX_TIME = '1792494000'; NX_INPUT = '300-4000/60:A'; NX_GPU_TIMELINE = '1' }
     foreach ($e in $Env) { $k, $v = $e -split '=', 2; $set[$k] = $v }
     $cli = $null
     $rgpFile = "$b\$Name.rgp"
