@@ -1,126 +1,32 @@
 /* Mon spawner: a mod of its own (violet_mons.dll, optional), window "Spawn a Pokemon" (F8 by default): a Pokemon made to
- * order, written into the first free box slot.
+ * order, written into the first free box slot; eggs and the trainers in the boxes (egg.cpp).
  *
  * The boxes are the save's box block (PKHeX: KBox 0x0D66012C), which the game keeps in memory and reads when the box
  * screen opens: 990 slots of 0x158 bytes, each an encrypted PK9 (empty slots too: an encrypted blank). We write our
- * own PK9 into a slot there, as live box editors and trade bots do on a console. The format, as PKHeX reads it
- * (offsets checked with violetrecomp\tools\svedit `layout`, our writer's output with `check`), decrypted:
- *   0 EC, 6 checksum (u16 sum of 0x08..0x148), 8 species (the game's internal index), 0xA item, 0xC TID16, 0xE SID16,
- *   0x10 EXP, 0x14 ability, 0x16 ability number (1, 2, 4), 0x1C PID, 0x20 nature, 0x21 stat nature, 0x22 fateful |
- *   gender << 1, 0x24 form, 0x26 EVs (hp atk def spe spa spd), 0x48 height, 0x49 weight, 0x4A scale, 0x58 nickname
- *   (13 UTF-16), 0x72 moves, 0x7A PP, 0x7E PP ups, 0x82 relearn moves, 0x8A current HP, 0x8C IVs (5 bits each, hp atk
- *   def spe spa spd; bit 30 egg, 31 nicknamed), 0x94 Tera type, 0x95 Tera override (0x13 none), 0xCE version, 0xD4
- *   affixed ribbon (0xFF none), 0xD5 language, 0xF8 OT name, 0x112 OT friendship, 0x11C met date (y-2000, m, d), 0x11F
- *   obedience level, 0x122 met location, 0x124 ball, 0x125 met level | OT gender << 7; party: 0x148 level, 0x14A max
- *   HP, then atk def spe spa spd.
- * Encrypted: the four 0x50 blocks from 0x08 shuffled by (EC >> 13) & 31, then 0x08..0x148 and 0x148..0x158 each XORed
- * with an LCRNG (x * 0x41C64E6D + 0x6073, high 16 bits) seeded with the EC.
+ * own PK9 into a slot there, as live box editors and trade bots do on a console. The format: pk9.h.
  *
  * The block is found by scanning guest memory for 960+ consecutive slots whose checksums hold (the window scans each
  * time it opens). The trainer (OT name, ids, language) is copied from the most common one in the boxes.
  * Tables: <build>\mods\mons_*.txt (svedit `monsdata`, PKHeX.Core's personal / move / experience data). */
-#include "filtercombo.h"
-#include "modkit.h"
+#include "mons.h"
 #include <algorithm>
-#include <atomic>
 #include <ctype.h>
-#include <map>
-#include <mutex>
 #include <random>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <string>
 #include <thread>
 #include <time.h>
-#include <vector>
-#include <windows.h>
 
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-
-namespace {
-
-enum { SLOT = 0x158, STORED = 0x148, MIN_RUN = 960, BOX_SLOTS = 30 };
-
-/* ---------------------------------------------------------------------------------------------- PK9 */
-const char *const shuffle[32] = {"ABCD", "ABDC", "ACBD", "ACDB", "ADBC", "ADCB", "BACD", "BADC", "BCAD", "BCDA", "BDAC",
-                                 "BDCA", "CABD", "CADB", "CBAD", "CBDA", "CDAB", "CDBA", "DABC", "DACB", "DBAC", "DBCA",
-                                 "DCAB", "DCBA", "ABCD", "ABDC", "ACBD", "ACDB", "ADBC", "ADCB", "BACD", "BADC"};
-
-u16 rd16(const u8 *p) { return (u16)(p[0] | p[1] << 8); }
-u32 rd32(const u8 *p) { return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24; }
-void wr16(u8 *p, u32 v) { p[0] = (u8)v; p[1] = (u8)(v >> 8); }
-void wr32(u8 *p, u32 v) { wr16(p, v); wr16(p + 2, v >> 16); }
-
-void xor_stream(u8 *d, u32 seed, int from, int to) {
-    for (int i = from; i < to; i += 2) {
-        seed = seed * 0x41C64E6Du + 0x6073u;
-        wr16(d + i, rd16(d + i) ^ (seed >> 16));
-    }
-}
-
-u16 checksum(const u8 *dec) {
-    u32 s = 0;
-    for (int i = 8; i < STORED; i += 2) s += rd16(dec + i);
-    return (u16)s;
-}
-
-void encrypt(const u8 *dec, u8 *enc) {
-    u32 ec = rd32(dec);
-    const char *order = shuffle[(ec >> 13) & 31];
-    memcpy(enc, dec, SLOT);
-    for (int pos = 0; pos < 4; pos++) memcpy(enc + 8 + 0x50 * pos, dec + 8 + 0x50 * (order[pos] - 'A'), 0x50);
-    xor_stream(enc, ec, 8, STORED);
-    xor_stream(enc, ec, STORED, SLOT);
-}
-
-void decrypt(const u8 *enc, u8 *dec) {
-    u32 ec = rd32(enc);
-    u8 t[SLOT];
-    memcpy(t, enc, SLOT);
-    xor_stream(t, ec, 8, STORED);
-    xor_stream(t, ec, STORED, SLOT);
-    const char *order = shuffle[(ec >> 13) & 31];
-    memcpy(dec, t, SLOT);
-    for (int pos = 0; pos < 4; pos++) memcpy(dec + 8 + 0x50 * (order[pos] - 'A'), t + 8 + 0x50 * pos, 0x50);
-}
-
-/* an encrypted slot's checksum holds (the block shuffle does not change the sum) */
-bool slot_valid(const u8 *enc) {
-    if (rd16(enc + 4)) return false;
-    u32 seed = rd32(enc), s = 0;
-    for (int i = 8; i < STORED; i += 2) {
-        seed = seed * 0x41C64E6Du + 0x6073u;
-        s += rd16(enc + i) ^ (seed >> 16);
-    }
-    return (u16)s == rd16(enc + 6);
-}
+namespace mons {
 
 /* ---------------------------------------------------------------------------------------------- tables */
-struct Species {
-    u16 national, form, internal;
-    std::string name, form_name;
-    u8 growth, gender;              /* gender: 0 male only, 254 female only, 255 genderless, else the female ratio */
-    u16 ability[3];
-    u8 type1, type2, friendship;
-    u8 base[6];                     /* hp atk def spa spd spe */
-    std::string label;
-};
-struct Move { u16 id; u8 pp; std::string name; };
-
 std::vector<Species> g_species;
 std::vector<Move> g_moves;
 std::map<u16, std::string> g_ability_names;
 std::vector<std::pair<u8, std::string>> g_balls;
 std::vector<std::pair<u16, std::string>> g_held;   /* items a mon can hold (items.txt, by name) */
 std::vector<u32> g_exp[6];
-struct Trainer { u16 tid = 0, sid = 0; u8 name[26] = {}; u8 gender = 0, language = 2, version = 51; u16 location = 6; bool ok = false; };
-Trainer g_save_trainer;                     /* mons_trainer.txt (svedit monsdata, from the save); else the boxes' */
-void put_name(u8 *dst, const char *s);
+Trainer g_save_trainer;
 std::string g_error;
 
 std::vector<std::vector<std::string>> read_tsv(const std::string &path) {
@@ -193,12 +99,13 @@ void load_tables(const char *cache_dir) {
     if (g_error.empty() && (g_species.empty() || g_moves.empty() || g < 6)) g_error = "the mons_*.txt tables are incomplete";
 }
 
-const char *const natures[25] = {"Hardy", "Lonely", "Brave", "Adamant", "Naughty", "Bold", "Docile", "Relaxed", "Impish",
+extern const char *const natures[25] = {"Hardy", "Lonely", "Brave", "Adamant", "Naughty", "Bold", "Docile", "Relaxed", "Impish",
                                  "Lax", "Timid", "Hasty", "Serious", "Jolly", "Naive", "Modest", "Mild", "Quiet",
                                  "Bashful", "Rash", "Calm", "Gentle", "Sassy", "Careful", "Quirky"};
-const char *const types[18] = {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel",
+extern const char *const types[18] = {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel",
                                "Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark", "Fairy"};
-const char *const stat_names[6] = {"HP", "Atk", "Def", "SpA", "SpD", "Spe"};   /* the UI's order */
+extern const char *const stat_names[6] = {"HP", "Atk", "Def", "SpA", "SpD", "Spe"};
+extern const int ev_slot[6] = {0, 1, 2, 4, 5, 3};
 
 /* ---------------------------------------------------------------------------------------------- what to make */
 struct Spec {
@@ -227,11 +134,6 @@ u32 stat(const Species &s, const Spec &p, int i) {    /* i: UI order */
     return v;
 }
 
-void put_name(u8 *dst, const char *s) {     /* 12 characters + terminator, UTF-16 (ASCII input) */
-    memset(dst, 0, 26);
-    for (int i = 0; i < 12 && s[i]; i++) wr16(dst + 2 * i, (u8)s[i]);
-}
-
 /* the decrypted PK9 */
 void build(const Spec &p, const Trainer &t, u8 *d) {
     const Species &s = g_species[p.species];
@@ -255,7 +157,6 @@ void build(const Spec &p, const Trainer &t, u8 *d) {
     int gender = s.gender == 255 ? 2 : s.gender == 254 ? 1 : s.gender == 0 ? 0 : p.gender;
     d[0x22] = (u8)(gender << 1);
     wr16(d + 0x24, s.form);
-    static const int ev_slot[6] = {0, 1, 2, 4, 5, 3};     /* UI hp atk def spa spd spe -> hp atk def spe spa spd */
     for (int i = 0; i < 6; i++) d[0x26 + ev_slot[i]] = (u8)p.ev[i];
     d[0x48] = (u8)rng(); d[0x49] = (u8)rng(); d[0x4A] = (u8)rng();
     put_name(d + 0x58, p.nickname[0] ? p.nickname : s.name.c_str());
@@ -564,37 +465,55 @@ bool find_trainer(const std::vector<u8> &blk, Trainer &out) {
     return best > 0;
 }
 
-/* the spec into the first empty slot of every copy; returns the slot (-1: none) and fills msg */
-int spawn(const Spec &p, std::string &msg) {
+bool current_trainer(const std::vector<u8> &blk, Trainer &out, std::string &msg) {
+    out = g_save_trainer;
+    if (out.ok || find_trainer(blk, out)) return true;
+    msg = "No trainer: run svedit monsdata (writes mods/mons_trainer.txt), or keep one of your own mons in the boxes.";
+    return false;
+}
+
+bool box_snapshot(std::vector<u8> &blk, std::string &msg) {
+    std::lock_guard<std::mutex> l(g_lock);
+    for (u64 b : g_blocks) if (block_at(b, blk)) return true;
+    msg = g_blocks.empty() ? "No box block in memory: scan (load into the overworld first)." : "The box block moved: scan again.";
+    return false;
+}
+
+int box_put(BuildFn build_fn, const void *ctx, const char *label, std::string &msg) {
     std::lock_guard<std::mutex> l(g_lock);
     std::vector<u8> blk;
     std::vector<u64> live;
     for (u64 b : g_blocks) if (block_at(b, blk)) live.push_back(b);
     if (live.empty()) { msg = "No box block in memory: scan (load into the overworld first)."; return -1; }
     if (!block_at(live[0], blk)) { msg = "The box block moved: scan again."; return -1; }
-    Trainer t = g_save_trainer;
-    if (!t.ok && !find_trainer(blk, t)) {
-        msg = "No trainer: run svedit monsdata (writes mods/mons_trainer.txt), or keep one of your own mons in the boxes.";
-        return -1;
-    }
+    Trainer t;
+    if (!current_trainer(blk, t, msg)) return -1;
     int slot = -1;
     u8 dec[SLOT];
     for (int i = 0; i < MIN_RUN && slot < 0; i++) {
         decrypt(&blk[(size_t)i * SLOT], dec);
-        if (!rd16(dec + 8)) slot = i;
+        if (!rd16(dec + O_SPECIES)) slot = i;
     }
     if (slot < 0) { msg = "The boxes are full."; return -1; }
+    if (!build_fn(ctx, t, dec, msg)) return -1;
     u8 enc[SLOT];
-    build(p, t, dec);
     encrypt(dec, enc);
     int w = 0;
     for (u64 b : live) if (mem_write(b + (u64)slot * SLOT, enc, SLOT)) w++;
     char m[256];
-    snprintf(m, sizeof m, "%s: box %d, slot %d (%d cop%s written). Open the boxes to see it.",
-             g_species[p.species].label.c_str(), slot / BOX_SLOTS + 1, slot % BOX_SLOTS + 1, w, w == 1 ? "y" : "ies");
+    snprintf(m, sizeof m, "%s: box %d, slot %d (%d cop%s written). Open the boxes to see it.", label,
+             slot / BOX_SLOTS + 1, slot % BOX_SLOTS + 1, w, w == 1 ? "y" : "ies");
     msg = m;
     modkit::host()->log(0, "mons: %s", m);
     return slot;
+}
+
+/* the spec into the first empty slot of every copy; returns the slot (-1: none) and fills msg */
+int spawn(const Spec &p, std::string &msg) {
+    return box_put([](const void *ctx, const Trainer &t, u8 *dec, std::string &) {
+        build(*(const Spec *)ctx, t, dec);
+        return true;
+    }, &p, g_species[p.species].label.c_str(), msg);
 }
 
 /* the rest of the spec for wild spawns: the game's hook on PokemonParam::Create (violetrecomp\wild.c, same layout),
@@ -988,11 +907,14 @@ void test_thread(std::string arg) {
     }
 }
 
-} // namespace
+} // namespace mons
+
+using namespace mons;
 
 void mons_init(const char *cache_dir) {
     load_tables(cache_dir);
     enc_load(cache_dir);
+    egg_init(cache_dir);
     if (!g_error.empty()) { modkit::host()->log(0, "mons: %s", g_error.c_str()); return; }
     modkit::host()->log(1, "mons: %zu species / forms, %zu moves", g_species.size(), g_moves.size());
     for (size_t i = 0; i < g_species.size(); i++) if (g_species[i].national == 25 && !g_species[i].form) g_spec.species = (int)i;
@@ -1315,6 +1237,8 @@ void mons_ui() {
         if (ImGui::BeginTabItem("Pokemon")) { ui_build(p, s); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Wild spawns")) { ui_wild(p, s); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Around you")) { ui_around(p, s); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Egg")) { egg_ui(p.species); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Trainers")) { trainers_ui(); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
     ImGui::End();
@@ -1380,7 +1304,7 @@ extern "C" __declspec(dllexport) int mons_wild_selftest(const char *cache_dir, c
 /* ---------------------------------------------------------------------------------------------- the mod */
 static void mod_ui() { mons_ui(); }
 
-static const NxMod mod = {"Spawn a Pokemon", nullptr, nullptr, nullptr, "1", "Write a made-to-order Pokemon into the boxes, make wild spawns a chosen species, spawn groups on the player, list and weight the area's spawns. Needs build\\mods\\mons_*.txt (svedit monsdata) and the wild hooks in the exe.", mod_ui};
+static const NxMod mod = {"Spawn a Pokemon", nullptr, nullptr, nullptr, "1", "Write a made-to-order Pokemon or egg into the boxes, show the trainer ids of boxed mons, make wild spawns a chosen species, spawn groups on the player, list and weight the area's spawns. Needs build\\mods\\mons_*.txt (svedit monsdata) and the wild hooks in the exe.", mod_ui};
 
 extern "C" __declspec(dllexport) const NxMod *nx_mod_init(const NxModHost *host) {
     if (host->version != NXMOD_VERSION) return NULL;

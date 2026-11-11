@@ -8,7 +8,10 @@
 //   dotnet run -- dump <save>\main <dir> <key>...   blocks' raw data to <dir>\<key>.bin
 //   dotnet run -- copy <save>\main <other>\main <regex>  blocks named like regex from another save (event data:
 //                                                  "^KBCAT|^KOutbreakBC": delivered raids / outbreaks, active BCAT outbreaks)
-//   dotnet run -- addmon <save>\main <species> <level> <nature> <ability 0-2> <nickname> <m1,m2,m3,m4> <hp/atk/def/spa/spd/spe EVs>
+//   dotnet run -- monsdata <save>\main <dir>        the F8 mod's tables, <dir>\mons_*.txt (mons_eggs.txt: PKHeX-checked eggs)
+//   dotnet run -- check <save>\main <pk9> [<ID No.> <SID>]  what PKHeX reads from a PK9 the mod made, legality; with a
+//                                                  trainer's ids, whether it is (hatches) shiny for them
+//   dotnet run -- addmon<save>\main <species> <level> <nature> <ability 0-2> <nickname> <m1,m2,m3,m4> <hp/atk/def/spa/spd/spe EVs>
 //                                                  a made-up mon (full IVs, the save's trainer), party or first free box slot
 //
 // Keys used so far: ride upgrades dash 0D707154, swim 76FF4AF0, high jump 54B8E8E1, glide 9DDF953F, climb 6ABB01F7,
@@ -157,6 +160,95 @@ switch (args[0])
             }
         }
         File.WriteAllLines(Path.Combine(dir, "mons_species.txt"), sp);
+        // mons_eggs.txt, for the mod's Egg tab: each species / form PKHeX lets hatch from an egg in SV, with the facts the
+        // mod copies (national form cycles nickflag move1..4 relearn1..4). Each egg is built here with the mod's rules
+        // (egg.cpp's header) and kept only if PKHeX's legality check passes; the flag / relearn variants are tried in
+        // turn and the counts printed, so a PKHeX rule we got wrong shows up here.
+        var eggs = new List<string>();
+        var variants = new (bool nick, bool relearn)[] { (true, false), (true, true), (false, false), (false, true) };
+        var wins = new int[variants.Length];
+        int eggFail = 0;
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        PK9 MakeEgg(ushort n, byte f, bool nick, bool relearnSame)
+        {
+            var pi = PersonalTable.SV.GetFormEntry(n, f);
+            var pk = new PK9 { Species = n, Form = f };
+            pk.EncryptionConstant = Util.Rand32();
+            pk.PID = Util.Rand32();
+            pk.Version = sav.Version;
+            pk.Language = sav.Language;
+            pk.OriginalTrainerName = sav.OT;
+            pk.OriginalTrainerGender = sav.Gender;
+            pk.ID32 = sav.ID32;
+            pk.CurrentLevel = 1;
+            pk.Nature = Nature.Hardy;
+            pk.StatNature = Nature.Hardy;
+            pk.SetAbilityIndex(0);
+            pk.Gender = pk.GetSaneGender();
+            pk.IVs = [31, 31, 31, 31, 31, 31];
+            var moves = LearnSource9SV.Instance.GetLearnset(n, f).GetBaseEggMoves(1).ToArray();
+            pk.SetMoves(moves);
+            pk.HealPP();
+            if (relearnSame)
+            {
+                var r = new ushort[4];
+                moves.AsSpan(0, Math.Min(4, moves.Length)).CopyTo(r);
+                pk.RelearnMove1 = r[0]; pk.RelearnMove2 = r[1]; pk.RelearnMove3 = r[2]; pk.RelearnMove4 = r[3];
+            }
+            pk.IsEgg = true;
+            pk.Nickname = SpeciesName.GetEggName(pk.Language, 9);
+            pk.IsNicknamed = nick;
+            pk.OriginalTrainerFriendship = (byte)pi.HatchCycles;
+            pk.MetLevel = 1;
+            pk.MetLocation = 0;
+            pk.EggLocation = 30023;                 // picnic
+            pk.MetDate = today;
+            pk.EggMetDate = today;
+            pk.ObedienceLevel = 1;
+            pk.Ball = (byte)Ball.Poke;
+            pk.TeraTypeOriginal = (MoveType)pi.Type1;
+            pk.TeraTypeOverride = (MoveType)TeraTypeUtil.OverrideNone;
+            pk.HeightScalar = 128; pk.WeightScalar = 128; pk.Scale = 128;
+            pk.HandlingTrainerName = "";
+            pk.CurrentHandler = 0;
+            pk.ResetPartyStats();
+            pk.RefreshChecksum();
+            return pk;
+        }
+        for (ushort n = 1; n <= 1025; n++)
+        {
+            var count = Math.Max(1, (int)PersonalTable.SV[n].FormCount);
+            for (byte f = 0; f < count; f++)
+            {
+                var pi = PersonalTable.SV.GetFormEntry(n, f);
+                if (!pi.IsPresentInGame || pi.HatchCycles == 0 || pi.EggGroup1 == 15) continue;     // 15: Undiscovered
+                if (!Breeding.CanHatchAsEgg(n)) continue;
+                PK9? ok = null;
+                string? report = null;
+                for (int v = 0; v < variants.Length && ok == null; v++)
+                {
+                    var pk = MakeEgg(n, f, variants[v].nick, variants[v].relearn);
+                    var la = new LegalityAnalysis(pk);
+                    if (la.Valid) { ok = pk; wins[v]++; }
+                    else report ??= la.Report();
+                }
+                if (ok == null)
+                {
+                    // most fail for a reason of their own (not a first stage, a form that only comes from evolving);
+                    // these three surely hatch, so a failure there is our rules' fault: its report says which
+                    eggFail++;
+                    if (n is 1 or 133 or 906 && f == 0) Console.WriteLine($"egg {s.Species[n]}: NOT LEGAL as built (fix the rules):\n{report}");
+                    continue;
+                }
+                var mv = new[] { ok.Move1, ok.Move2, ok.Move3, ok.Move4 };
+                var rl = new[] { ok.RelearnMove1, ok.RelearnMove2, ok.RelearnMove3, ok.RelearnMove4 };
+                eggs.Add(string.Join('\t', new object[] { n, f, ok.OriginalTrainerFriendship, ok.IsNicknamed ? 1 : 0 }
+                    .Concat(mv.Select(m => (object)m)).Concat(rl.Select(m => (object)m))));
+            }
+        }
+        File.WriteAllLines(Path.Combine(dir, "mons_eggs.txt"), eggs);
+        Console.WriteLine($"{eggs.Count} egg species/forms ({eggFail} not legal as eggs); variants nickname flag / relearn = moves: " +
+                          string.Join(", ", variants.Select((v, i) => $"{(v.nick ? "nick" : "no nick")}/{(v.relearn ? "relearn" : "no relearn")} {wins[i]}")));
         var mv = new List<string>();
         var dummied = MoveInfo.GetDummiedMovesHashSet(EntityContext.Gen9);
         for (ushort m = 1; m < s.Move.Count; m++)
@@ -229,6 +321,17 @@ switch (args[0])
                           $"moves {string.Join(", ", pk.Moves.Select(m => s.Move[m]))} PP {pk.Move1_PP}/{pk.Move2_PP}/{pk.Move3_PP}/{pk.Move4_PP} " +
                           $"OT {pk.OriginalTrainerName} {pk.TID16}/{pk.SID16} ball {pk.Ball} tera {pk.TeraTypeOriginal} lang {pk.Language} ver {pk.Version} " +
                           $"met {pk.MetLocation} lv{pk.MetLevel} {pk.MetDate} stats {pk.Stat_HPMax}/{pk.Stat_ATK}/{pk.Stat_SPA} party level {pk.Stat_Level}");
+        if (pk.IsEgg)
+            Console.WriteLine($"egg: cycles left {pk.OriginalTrainerFriendship} egg location {pk.EggLocation} met location {pk.MetLocation} " +
+                              $"egg date {pk.EggMetDate} relearn {string.Join(", ", new[] { pk.RelearnMove1, pk.RelearnMove2, pk.RelearnMove3, pk.RelearnMove4 }.Select(m => s.Move[m]))}");
+        Console.WriteLine($"OT ID No. {pk.ID32 % 1000000:D6} SID {pk.ID32 / 1000000:D4}, PSV {((pk.PID >> 16) ^ (pk.PID & 0xFFFF)) >> 4}");
+        if (args.Length > 3)
+        {
+            // check <main> <pk9> <hatcher ID No.> <hatcher SID>: whether it hatches shiny for that trainer
+            var id = uint.Parse(args[3]) + uint.Parse(args[4]) * 1000000u;
+            var x = (pk.PID >> 16) ^ (pk.PID & 0xFFFF) ^ (id & 0xFFFF) ^ (id >> 16);
+            Console.WriteLine($"for {args[3]}/{args[4]} (TSV {((id & 0xFFFF) ^ (id >> 16)) >> 4}): {(x < 16 ? $"shiny (xor {x})" : "not shiny")}");
+        }
         var la = new LegalityAnalysis(pk);
         Console.WriteLine(la.Valid ? "legal" : la.Report());
         return 0;

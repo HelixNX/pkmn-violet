@@ -36,7 +36,8 @@ menu is nxrecomp's `nxui.dll` next to the exe (ui/nxui.cpp; without it the game 
 optional DLLs in `build\cmake\mods\` (`NX_MODS=0` loads none), one each: **violet_raids** (Tera Raids, F6: find
 seeds, write dens), **violet_items** (Items, F7: give / set, a Lua console in the game's VM), **violet_mons** (Spawn
 a Pokemon, F8: into the boxes; wild spawns made to order; "Around you": spawn on the player, the area's spawn list
-and weights; held items), **violet_weather** (F9 toggles rain; Weather window, F10: any type, transition time,
+and weights; held items; "Egg": eggs to order, shiny for whoever hatches them, cycles left; "Trainers": the OT, ID No.
+and SID of every boxed mon), **violet_weather** (F9 toggles rain; Weather window, F10: any type, transition time,
 back to the game's own). Sources `mods\<name>\`, shared `mods\common\`. Their data: `python mods\raids\raiddata.py`
 (raids.dat, encounter tables; needs `build\ooz`), `mons_*.txt` and `items.txt` in `build\mods\` from svedit
 (`monsdata`, `items`). Packages: `-Mods all` (or names) copies the DLLs; the data is not packaged (game-derived).
@@ -76,7 +77,10 @@ edits: `violetrecomp\tools\svedit` (.NET 9 + PKHeX.Core; back up `build\save` fi
    a child in a job object so it stops with the game, joins 127.0.0.1 and shows the LAN address; friends outside the
    network still need the port forwarded or a tunnel). Also later: the whole room server on the ESP32 with the beacon
    (../ldn-beacon/CLAUDE.md, Open).
-1. Try the F8 changes above; confirm the wild spec on a caught mon (overworld shiny vs battle shiny).
+1. **F8 eggs (2026-11-11; built, svedit's part not compiled):** compile svedit on the .NET 9 machine, `monsdata`
+   (writes `mons_eggs.txt`, checked by PKHeX), then make, check and hatch an egg; trade one to a second instance.
+   NOTES.md, "Eggs and trainer ids in F8".
+   Try the F8 changes above; confirm the wild spec on a caught mon (overworld shiny vs battle shiny).
 2. Spawn-pool rules: wrap the encounter table's filter / per-entry rules (version, time, flags, weights; F8 weights
    are the first step), spawn density parameters. NOTES.md, "Planned next" item 3.
 3. **Raid crystals not refreshing after F6 writes**: the first rebuild hook only removed the dens (crystals

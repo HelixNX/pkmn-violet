@@ -1571,3 +1571,38 @@ the transition time, or "Game's own" (reset). Through host->run_script (lua.c), 
   since (lua_pcall_entry, wild, raidgem): lifted code is per machine, so pulling a patches.txt change needs a re-lift
   (`python ..\..\nxrecomp\tools\lifter\a64lift.py lift ..\build\lifted` from violetrecomp\, 12 min, then a 20 min
   build). The build gives no warning when patches.txt is newer than the lift.
+
+## Eggs and trainer ids in F8 (2026-11-11; mod built, NOT yet tried in game; svedit changes NOT compiled)
+
+Asked: eggs in the spawn menu, a separate trainer ID / secret ID, any legal IVs (no EVs), the right egg format and PID,
+a way to see a mon's TID / SID in game, natures etc., egg progress (trade it, walk a few steps, it hatches).
+
+- **Where it went:** two tabs of the F8 window ("Egg", "Trainers") in violet_mons.dll, not a DLL of their own: they
+  share its species tables and its box-block scan (a second DLL would scan the 4 GB guest space again). Split for it:
+  `mods/mons/pk9.h` (the PK9 format: offsets as names, crypto, names UTF-8 <-> UTF-16, egg names per language, ID32
+  <-> the game's 6-digit ID No. + SID, shiny xor / TSV), `mods/mons/mons.h` (the tables, the save's trainer, the box
+  block: `box_snapshot`, `current_trainer`, `box_put(build fn)`; mons.cpp's old anonymous namespace is `mons` now),
+  `mods/mons/egg.cpp` (the egg builder, both tabs, `mons_egg_selftest` export).
+- **The egg** (egg.cpp header has every field): level 1, met level 1, obedience 1, egg location 30023 (picnic), met
+  location 0 (a trade sets 30002 itself), egg and met date today, nickname the egg name in the OT's language, egg
+  bit, EVs 0, no item, Tera type one of the species' two, OT friendship = hatch counter. Choices: IVs, nature,
+  ability incl. hidden, gender, ball (not Cherish), Tera of the two, shiny, cycles left (slider, "Almost ready" = 1,
+  "Fresh"; 0 asks first in a popup), custom OT (name, gender, ids), "Shiny for another trainer".
+- **Shiny / PID:** an egg's PID is fixed when made; shininess is checked against whoever hatches it (a traded egg
+  takes the hatcher as OT). Shiny: random low half, high half = low ^ TID ^ SID ^ (random 0-15), as the game's
+  rerolls give; not shiny: rerolled until the xor is >= 16 for the hatcher. Self-test (stand-in tables, Python
+  decrypt, 3 eggs): xor 5 / 9 / 12 for the hatcher, ~48800 for the OT; level 1, HP right.
+- **Trainers tab:** "Read the boxes" lists every boxed mon with OT, ID No. / SID (or 16-bit), game, shiny; "Only
+  other trainers"; per row "Hatcher" (eggs shiny for that trainer) and "OT". So: a friend trades you any mon, read
+  their ids off it, make the egg, trade it back, they hatch it shiny. Party mons are not listed (box only).
+- **Unsure, left to PKHeX:** the nickname flag on an unhatched SV egg (we think set) and whether relearn moves are
+  empty or the egg's moves. `svedit monsdata` now writes `mons_eggs.txt` by building each egg with these rules,
+  trying the four flag / relearn variants and keeping the first PKHeX's LegalityAnalysis passes (prints the counts;
+  prints the report if Bulbasaur, Eevee or Sprigatito fail = our rules are wrong). The mod copies the flag, moves
+  and relearn moves from that file, so it follows whatever PKHeX accepted. Also unchecked: whether 0 or 1 cycles left
+  pass PKHeX (1 is what an egg walked nearly to the end shows), how far 1 cycle is to walk in SV.
+- **To do on the machine with .NET 9:** compile svedit (written blind: `LearnSource9SV.Instance.GetLearnset(n,
+  f).GetBaseEggMoves(1)`, `SpeciesName.GetEggName(lang, 9)`, `Breeding.CanHatchAsEgg(n)`, `pi.HatchCycles` /
+  `EggGroup1` are from memory of PKHeX's API), run `monsdata`, then in game: Egg tab, make one, `check` a dumped
+  copy (or `mons_egg_selftest(cache, out, national, form, ot_id32, hatcher_id32, cycles)` from Python ctypes) with
+  `check <main> <pk9> <ID No.> <SID>`, then hatch one, and trade one to a second instance and hatch it there.
