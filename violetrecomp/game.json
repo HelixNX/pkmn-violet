@@ -10,5 +10,6 @@
   "build": "../build",
   "dlc": [1],
   "framerate": 60,
+  "online_notice": true,
   "theme": {"background": "#17121f", "panel": "#261c36", "accent": "#8b5cf6", "accent2": "#f5c542", "text": "#f3eefc", "rounding": 7}
 }
