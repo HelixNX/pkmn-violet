@@ -50,8 +50,8 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
   GTX 1650 Ti laptop (GPU-bound). Known rendering issues: missing letters (likely fixed 2026-11-10, unconfirmed),
   no rain streaks near the camera.
 - Local play over rooms between instances (Union Circle, Tera raids) and with a **real Switch** through
-  `../ldn-beacon` (raids, link trades: user-checked 2026-11-11; slow to connect because the Switch's first join
-  attempts drop).
+  `../ldn-beacon` (raids, link trades: user-checked 2026-11-11; the dropped first joins are fixed, NOTES "Local
+  play").
   Joining from the menu after an offline start works.
 - Event raids: the friend's delivery (7-star Rillaboom, identifier 20230728) shows as an event crystal after a
   restart. Not yet fought or caught.
@@ -74,8 +74,11 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
 5. Missing letters (check text after a long session) and rain. NOTES "Open rendering issues".
 6. Performance. NOTES "Performance" (ranked lists from the reference sweeps).
 7. Older GPUs (RX 580): plan in `nxrecomp/docs/GPUS.md`, not started (a friend may take it).
-8. Beacon: the Switch's first join attempt drops after ~1.7 s, the second stays (2026-11-11 log). For
-   `../ldn-beacon/NOTES.md`.
+8. Long term (the user, 2026-11-11: "eventually an MMO"): online through our own server: the NPLN gRPC calls Violet
+   makes (sign-in, matchmaking for raids / Union Circle / trades, news / Mystery Gift) answered by us, TLS and
+   account hooked in our runtime / lifted code (DNS alone can't: NPLN is TLS against Nintendo's CA + NSO tokens).
+   More than 4 players in one world would mean changing the game. Until then "Connect to the Internet" shows a
+   notice (nifm.c, `"online_notice"`; preset 0 submitted, then IRequest 21 = the console's connection applet info).
 
 ## ROMs
 

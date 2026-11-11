@@ -418,8 +418,14 @@ Kernel / I/O:
   (ESP32-S3). Redirecting DNS to play online doesn't work: NPLN is TLS against Nintendo's CA + account / NSO tokens.
 - A recomp host leaves the security parameter (server random) zero; a trade opens its network twice (2026-11-11:
   `network of 192.168.1.2` at :34 and :37), the Switch joined 2 s after the second; first attempt dropped after 1.7 s
-  (deauthentication reason 3), second stayed. **Link trades with a real Switch work** (user, 2026-11-11); the drops
-  are why connecting took long.
+  (deauthentication reason 3), second stayed. **Link trades with a real Switch work** (user, 2026-11-11).
+- **Why joins dropped:** a link-code search hosts and scans in turns (log: "created a network", "scan found 0",
+  created again). The beacon kept a torn-down network on the air until 5 s without a ScanResp; the Switch joined
+  it, the PC (scanning, not hosting) ignored the Connect, and the Switch left ~515 ms after the auth response.
+  Fixed: ldn_net.c sends DestroyNetwork to whoever scanned in the last 10 s (`watchers`; not broadcast, a room
+  member connected elsewhere might take it as its own), and the beacon drops the network on it (fallback: scan
+  every 0.5 s, off after 2.5 s). Next trade: first join stayed, 1 s after the network went up (user: the rest of
+  the wait is the search itself, slow online too).
 - In Union Circle the world is simulated by one player at a time (it moves). Raids there are separate per player
   (others' raids only joined from the menu).
 
