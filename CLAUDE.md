@@ -43,7 +43,7 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
 
 **Switches** (read once at boot): `NX_ROOM`, `NX_NICK`, `NX_MODS=0`, `NX_RES_SCALE`, `NX_FPS=0`, `NX_TIME`,
 `NX_VK_VALIDATION`, `NX_PROFILE`, `NX_GPU_PROF`, `NX_GPU_TIMELINE`, `NX_HITCH_MS`, `NX_WILD_LOG=1`, `NX_WATCH_MEM`,
-`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`, `NX_LUA_GC=0`, `NX_PRESENT_HOLD=0`, `NX_CORE_MIGRATE=0`; the rest: grep `NOTES.md`. `build\clock.txt` (Unix seconds; the Events
+`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`, `NX_LUA_GC=0`, `NX_PRESENT_HOLD=0`, `NX_CORE_MIGRATE=0`, `NX_SHADER_PRELOAD=0`; the rest: grep `NOTES.md`. `build\clock.txt` (Unix seconds; the Events
 window writes it) starts the game's clock there at every start, until deleted.
 
 ## State (2026-11-11)

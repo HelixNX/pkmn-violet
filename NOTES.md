@@ -372,6 +372,14 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
   first frame. The 20-37 ms runs of the earlier session are probably a mod window's ImGui; not reproduced yet.
 - The game's full-collection requests did not happen at all in those two sessions (`0 full collections asked`):
   what triggers them is not known, and the hurry path is still unplayed.
+- **Shader loads in the field** (the 58 ms frame: 3 loads, 45 ms) are not translations: every shader the game
+  has is translated already (`JIT waits 0`). The time is `shader_load` on the render thread at a shader's first
+  draw: reading its loose `.spv` (8,111 files), scanning it and vkCreateShaderModule. **Fix (gpu_shader.c,
+  `preload_thread`; `NX_SHADER_PRELOAD=0` off; built 2026-11-12, booted, not played yet):** `gpu_shader_created`
+  queues a shader that has a translation for a thread that loads it then (the game makes shader objects while it
+  loads); `ShaderCode.load_state` settles who loads when a draw gets there first. 4,000+ loaded ahead in the first
+  45 s. To check in play: `shaders N ms (n)` in field slow-frame lines near 0. A new pipeline for a new shader is
+  still built off the draw (its draws skipped until done), as before.
 - Still open at 120, 2x: GPU busy 7-9 ms in some areas (GPU-bound there; 1,132 of 1,538 slow frames were GPU
   wait); translation spikes with no cause in the slow-frame line (~25 a session over 15 ms); presenting 15-25 ms
   (53 frames); single shader loads of 34-36 ms. NX_PROFILE's report is a ~200 ms hitch every 600 frames.
