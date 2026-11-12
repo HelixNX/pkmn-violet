@@ -405,6 +405,16 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
   - 0.63-0.65 ms outside passes (155-162 copies, clears, barriers a frame).
   - By pass at 3840x2160: lit buffer + depth 1.96 ms (10 passes), `c0:37` 1.66 (46 passes: the skinning chain and
     others share the label), G-buffer 1.56 (3 passes).
+- **Skinning draws 1.0 -> 0.30 ms a frame** (2026-11-12, user sessions `run-session-1112g..j.log`, NX_GPU_PROF=2).
+  Every skinning draw captures into its own, non-adjacent place of one pool (3 buffers, strides 12 / 4 / 4), so
+  spans cannot be shared. (1) The vertex shader stores its captures itself (translate.py `PC_DECL_XFB`: device
+  addresses in push constants after the 20 common bytes; gpu_draw.c `xfb_begin`, point lists drawn without
+  indices; `NX_XFB_STORE=0` off): 6.6 -> 3.3 us a draw. (2) `xfb_hazard` looks only at the vertex streams the
+  attributes name and the program's stages, and at the captures one by one instead of their hull (`xfb_ranges`):
+  passes ended for it 46 -> 0.5 a frame, 1.8 us a draw, "outside passes" 0.8 -> 0.67 ms. Validation run
+  (`-1112k.log`): only the two known messages (Location-06272, OpEntryPoint-08743). Not confirmed by the user
+  yet: that characters and Pokemon animate as before. The translator changed: `build/shaders/spv/27a75578`.
+  Left there: the game's own barriers between skinning draws (88 a frame end a pass at gpu.c OP_BARRIER).
 - Still open at 120, 2x: GPU busy 7-9 ms in some areas (GPU-bound there; 1,132 of 1,538 slow frames were GPU
   wait); translation spikes with no cause in the slow-frame line (~25 a session over 15 ms); presenting 15-25 ms
   (53 frames); single shader loads of 34-36 ms. NX_PROFILE's report is a ~200 ms hitch every 600 frames.
