@@ -380,6 +380,15 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
   loads); `ShaderCode.load_state` settles who loads when a draw gets there first. 4,000+ loaded ahead in the first
   45 s. To check in play: `shaders N ms (n)` in field slow-frame lines near 0. A new pipeline for a new shader is
   still built off the draw (its draws skipped until done), as before.
+- **120 fps at 2x after the fixes above** (user session, `build/run-session-1112d.log`, NX_HITCH_MS=10,
+  NX_GPU_TIMELINE=1, window 2560x1440): the stalls are gone (15 frames over 16 ms and 3 over 25 ms in ~3 minutes
+  of play after loading, none over 50; no shader load in any slow frame, so the preload works; no full-collection
+  request again). What is left is the GPU: 1,883 of 2,016 frames over 10 ms are GPU wait. GPU busy 6.7 ms a frame
+  where 120 holds (1% low 9-12 ms) and 8.1-9.2 ms where it does not (97-110 fps for 5 to 8 windows in a row);
+  translating 2.1-3.6 ms. Seven frames of 16-30 ms were translation with nothing attributed (no upload, image,
+  pipeline or shader time). Lua's longest step 6-15 ms per 30 s. Next: per-pass GPU time at 2x in one of the
+  97-110 fps places (NX_GPU_PROF=1 or an RGP capture), and a fractional render scale (2x renders 3840x2160 for a
+  1440p window; "To do" GPU 5).
 - Still open at 120, 2x: GPU busy 7-9 ms in some areas (GPU-bound there; 1,132 of 1,538 slow frames were GPU
   wait); translation spikes with no cause in the slow-frame line (~25 a session over 15 ms); presenting 15-25 ms
   (53 frames); single shader loads of 34-36 ms. NX_PROFILE's report is a ~200 ms hitch every 600 frames.
