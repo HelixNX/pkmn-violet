@@ -1068,9 +1068,20 @@ static void ui_build(Spec &p, const Species *s) {
 }
 
 /* tab "Wild spawns": what the game spawns by itself from now on */
+/* the two rules are kept between sessions (settings.ini mod.mons.all_shiny / mod.mons.no_battles) and put back
+ * at start-up, before the window is ever opened */
+static bool all_shiny = false, no_battles = false;
+
+static void wild_rules_restore(const NxModHost *host) {
+    all_shiny = host->setting_get_int("mons.all_shiny", 0) != 0;
+    no_battles = host->setting_get_int("mons.no_battles", 0) != 0;
+    if (all_shiny) if (AllShiny f = all_shiny_fn()) f(1);
+    if (no_battles) if (NoBattles f = no_battles_fn()) f(1);
+}
+
 static void ui_wild(Spec &p, const Species *s) {
-    static bool all_shiny = false;
     if (ImGui::Checkbox("All spawns shiny", &all_shiny)) {
+        modkit::host()->setting_set_int("mons.all_shiny", all_shiny);
         std::lock_guard<std::mutex> l(g_status_lock);
         if (AllShiny f = all_shiny_fn()) {
             f(all_shiny ? 1 : 0);
@@ -1079,8 +1090,8 @@ static void ui_wild(Spec &p, const Species *s) {
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Every Pokemon whose shininess the game rolls: wild spawns, and others made the same way.");
     ImGui::SameLine();
-    static bool no_battles = false;
     if (ImGui::Checkbox("No contact battles (dev)", &no_battles)) {
+        modkit::host()->setting_set_int("mons.no_battles", no_battles);
         if (NoBattles f = no_battles_fn()) f(no_battles ? 1 : 0);
         else field_status("No battle hook in this build.");
     }
@@ -1311,6 +1322,7 @@ extern "C" __declspec(dllexport) const NxMod *nx_mod_init(const NxModHost *host)
     if (strcmp(host->title_id, "01008F6008C5E000") && strcmp(host->title_id, "0100A3D008C5C000")) return NULL;
     if (!modkit::init(host, "mons")) return NULL;
     mons_init(host->cache_dir);
+    wild_rules_restore(host);
     modkit::window("Spawn a Pokemon", "F8", mons_open, mons_toggle);
     return &mod;
 }
