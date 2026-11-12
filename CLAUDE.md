@@ -73,7 +73,9 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
 4. Raid crystals after F6 writes: do they show again (`raidgem:` lines)? NOTES "Raid crystals".
 5. Missing letters (check text after a long session) and rain. NOTES "Open rendering issues".
 6. Performance. NOTES "Performance" (ranked lists from the reference sweeps).
-7. Older GPUs (RX 580): plan in `nxrecomp/docs/GPUS.md`, not started (a friend may take it).
+7. Older GPUs (RX 580 / GCN): 8-bit index and vertex input fallbacks and 64-wide waves built 2026-11-12, checked
+   on the 7800 XT with `NX_NO_U8_INDICES` / `NX_NO_VI_DYNAMIC` / `NX_WARP64`; next an RX 580 tester's run
+   (`nxrecomp/docs/GPUS.md` "State").
 8. Long term (the user, 2026-11-11: "eventually an MMO"): online through our own server: the NPLN gRPC calls Violet
    makes (sign-in, matchmaking for raids / Union Circle / trades, news / Mystery Gift) answered by us, TLS and
    account hooked in our runtime / lifted code (DNS alone can't: NPLN is TLS against Nintendo's CA + NSO tokens).
