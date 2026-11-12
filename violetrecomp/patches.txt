@@ -34,3 +34,18 @@ main+2933398 was aa0003f3 after raidgem_update       # mov x19, x0: the manager
 #
 # A failed script call named in the log before the game aborts (lua.c): the invoker's CallImpl, after lua_tolstring.
 main+b5d8fc  was aa0003e7 after script_error         # mov x7, x0: the error text
+
+
+# Lua's full collections logged (lua.c): they stop main for 40-150 ms. fullgen's and luaC_fullgc's first instructions.
+main+2b840  was a9ba7bfd after gc_fullgen           # stp x29, x30, [sp, #-0x60]!: x1 = global_State
+main+2b690  was a9bd7bfd after gc_fullgc            # stp x29, x30, [sp, #-0x30]!: x1 = emergency
+#
+# The game's per-frame collector calls (main+c8c36c; lua.c "Lua's collector"): its step and its 300 s full collect.
+main+c8c430 was 528000a1 after gc_step              # mov w1, #5: before lua_gc(L, LUA_GCSTEP, x2)
+main+c8c438 was f9403ac0 after gc_stepped           # ldr x0, [x22, #0x70]: after it
+main+c8c508 was 52800041 after gc_collect           # mov w1, #2: before lua_gc(L, LUA_GCCOLLECT)
+#
+# The game's own full collections (main+25ff7d0, through the pointer at [main+46d3928]; lua.c): both of its
+# lua_gc(L, LUA_GCCOLLECT) calls (lock already held / taken here).
+main+25ff808 was 52800041 after gc_request          # mov w1, #2: before the tail call
+main+25ff838 was 52800041 after gc_request          # mov w1, #2: before the call

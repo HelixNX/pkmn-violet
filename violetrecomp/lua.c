@@ -130,3 +130,154 @@ void h_script_error(Ctx *c) {
     hlog(0, "lua: the game's own script call failed (it aborts now): %s.%s: %s", cls ? cls : "(global)", fn ? fn : "?",
          msg ? msg : "(no message)");
 }
+
+/* Lua's stop-the-world collections, logged (patches.txt): main held its core for 40-150 ms a few times a minute
+ * with fullgen (main+2b840) on top of the profile. Lua 5.4.4+ layout: global_State totalbytes +10, GCdebt +18,
+ * GCestimate +20, gckind +66 (1 generational), genminormul +68, genmajormul +69. x30 says who asked:
+ * main+2afd0 is luaC_step (the heap grew past the major limit), main+2b6c0 luaC_fullgc (logged by its own hook) */
+static double gc_ms(void) {
+    LARGE_INTEGER f, t;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&t);
+    return (double)t.QuadPart * 1000.0 / (double)f.QuadPart;
+}
+
+void h_gc_fullgen(Ctx *c) {
+    static double last;
+    const u8 *g = (const u8 *)(uintptr_t)c->x[1];
+    double now = gc_ms();
+    hlog(1, "lua: full collection (generational) from main+%llx, %.1f s after the last: heap %.1f MB, estimate "
+            "%.1f MB, minor mul %u, major mul %u", c->x[30] - MAIN, last ? (now - last) / 1000 : 0,
+         (double)(*(s64 *)(g + 0x10) + *(s64 *)(g + 0x18)) / 1048576, (double)*(u64 *)(g + 0x20) / 1048576, g[0x68],
+         g[0x69] * 4);
+    last = now;
+}
+
+void h_gc_fullgc(Ctx *c) {
+    const u8 *g = (const u8 *)(uintptr_t)*(u64 *)(uintptr_t)(c->x[0] + 0x18);
+    /* x29 is still the caller's frame: its own return address is at +8 (lua_gc's caller, when it is lua_gc) */
+    hlog(1, "lua: luaC_fullgc(emergency %llu) from main+%llx (called from main+%llx), kind %u, heap %.1f MB", c->x[1],
+         c->x[30] - MAIN, *(u64 *)(uintptr_t)(c->x[29] + 8) - MAIN, g[0x66],
+         (double)(*(s64 *)(g + 0x10) + *(s64 *)(g + 0x18)) / 1048576);
+}
+
+/* Lua's collector, paced for frame rates above 30 (NX_LUA_GC=0: the game's own).
+ *
+ * The game keeps the collector stopped and drives it once a frame (main+c8c36c): generational mode, one young
+ * collection per frame (lua_gc(L, LUA_GCSTEP, 0)), a full one after 300 s without one. What survives two young
+ * collections is old and stays until a full collection, and at 60-120 fps that is anything alive for 17-33 ms
+ * (67 ms at the game's 30): the heap went from ~57 MB to its allocator's limit (~70 MB) every 45-60 s, and the
+ * emergency collection there stopped main for 60-150 ms. The routine has an incremental branch too (kind != 1:
+ * LUA_GCSTEP with 3000 KB), so the scripts run under either mode.
+ *
+ * Here: incremental mode, a step a frame of 1 KB over the debt, so the work follows what the frame allocated
+ * (step multiplier 12: Lua does multiplier / 16 units of work per byte allocated, so the ~3.5 M units of marking
+ * a 57 MB heap spread over ~5 MB of allocation, well inside the 13 MB of room; pause 100: the next cycle starts
+ * at once), and no 300 s full collection. A cycle that falls behind still ends in the
+ * allocator's emergency collection, as before. Every 3600 steps a line says what it cost.
+ *
+ * The game also asks for full collections itself: main+25ff7d0's lua_gc(L, LUA_GCCOLLECT), reached through the
+ * function pointer at [main+46d3928] from 14 places that let go of script objects (c50e14, c31b54, ff172c ...).
+ * In the field that was one every 4-12 s, each 50-70 ms of main holding its core (a 57 MB heap marked in one go).
+ * Here a request only hurries the paced collector: the steps grow to GC_HURRY_KB a frame until two cycles have
+ * ended (the one under way may already have marked what was just let go; the next one frees it), about half a
+ * second instead of a stall. NX_LUA_GC=2 keeps the paced steps and the game's full collections */
+#define LUA_GC (MAIN + 0xc8c520)                /* lua_gc(L, what, ...) */
+#define GC_COLLECT 2
+#define GC_STEP 5
+#define GC_INC 11
+#define GC_HURRY_KB 200                         /* ~2 ms a step (0.01 ms a KB measured) */
+#define GCS_PAUSE 8                             /* gcstate between cycles */
+static int gc_mode = 1;
+
+__attribute__((constructor)) static void gc_init(void) {
+    const char *e = getenv("NX_LUA_GC");
+    if (e) gc_mode = atoi(e);
+}
+
+static double gc_heap(const u8 *g) { return (double)(*(s64 *)(g + 0x10) + *(s64 *)(g + 0x18)) / 1048576; }
+
+/* per collector (the game has more than one VM); the step being timed is the calling thread's */
+typedef struct GcStat { const u8 *g; double after, alloc, ms, longest, lo, hi, since; u32 n; } GcStat;
+static GcStat gc_stat[4];
+static volatile LONG gc_hurry[4];               /* cycles still to finish at the hurried pace */
+static volatile LONG gc_asked[4];               /* the game's requests since the last line */
+static __declspec(thread) GcStat *gc_cur;
+static __declspec(thread) double gc_t0, gc_h0;
+
+/* before the game's lua_gc(L, LUA_GCSTEP, x2) (the lifter patches no branches: hooks sit on the instructions
+ * around the calls and change their arguments) */
+void h_gc_step(Ctx *c) {
+    u64 L = c->x[0];
+    const u8 *g = (const u8 *)(uintptr_t)*(u64 *)(uintptr_t)(L + 0x18);
+    int k = 0;
+    while (k < 3 && gc_stat[k].g && gc_stat[k].g != g) k++;
+    GcStat *st = &gc_stat[k];
+    if (st->g != g) { memset(st, 0, sizeof *st); st->g = g; st->since = gc_ms(); }
+    static u8 seen[4] = {9, 9, 9, 9};
+    if (seen[k] != g[0x66]) {
+        hlog(1, "lua: collector %p: kind %u at the game's step (was %u), step data %llu, state %u, heap %.1f MB",
+             (void *)g, g[0x66], seen[k], c->x[2], g[0x65], gc_heap(g));
+        seen[k] = g[0x66];
+    }
+    if (gc_mode >= 1) {
+        /* generational as Lua declares it: that kind, or incremental after a major collection that freed too
+         * little (lastatomic, +28), where every step is a whole mark until one frees enough */
+        if (g[0x66] == 1 || *(u64 *)(g + 0x28)) {
+            hlog(1, "lua: collector %p set to incremental (was kind %u, last atomic %llu, heap %.1f MB)", (void *)g,
+                 g[0x66], *(u64 *)(g + 0x28), gc_heap(g));
+            gcall(c, LUA_GC, L, GC_INC, 100, 12, 0, 0);
+        }
+        c->x[2] = gc_hurry[k] > 0 ? GC_HURRY_KB : 1;
+    }
+    c->x[0] = L;
+    c->x[1] = GC_STEP;
+    gc_cur = st;
+    gc_h0 = gc_heap(g);
+    gc_t0 = gc_ms();
+}
+
+/* after that call */
+void h_gc_stepped(Ctx *c) {
+    (void)c;
+    GcStat *st = gc_cur;
+    if (!st) return;
+    gc_cur = NULL;
+    const u8 *g = st->g;
+    double ms = gc_ms() - gc_t0, h0 = gc_h0, h1 = gc_heap(g);
+    if (st->n && h0 > st->after) st->alloc += h0 - st->after;
+    st->after = h1;
+    st->ms += ms;
+    if (ms > st->longest) st->longest = ms;
+    if (!st->n || h1 < st->lo) st->lo = h1;
+    if (h0 > st->hi) st->hi = h0;
+    LONG k = (LONG)(st - gc_stat);
+    if (gc_hurry[k] > 0 && g[0x65] == GCS_PAUSE) InterlockedDecrement(&gc_hurry[k]);
+    if (++st->n == 3600) {
+        double s = (gc_ms() - st->since) / 1000;
+        hlog(1, "lua: collector %p (%s): %.2f MB/s allocated, steps %.3f ms average, longest %.1f ms, heap %.1f-%.1f MB "
+                "over %.0f s, %ld full collections asked", (void *)g, g[0x66] == 1 ? "generational" : "incremental",
+             st->alloc / s, st->ms / st->n, st->longest, st->lo, st->hi, s, InterlockedExchange(&gc_asked[k], 0));
+        st->n = 0; st->alloc = st->ms = st->longest = st->hi = 0; st->since = gc_ms();
+    }
+}
+
+/* before the game's lua_gc(L, LUA_GCCOLLECT), its full collection after 300 s without one: the cycles above do
+ * that work, so it becomes LUA_GCCOUNT, which changes nothing */
+void h_gc_collect(Ctx *c) {
+    if (gc_mode == 1) c->x[1] = 3;
+}
+
+/* before the game's own request for a full collection (main+25ff808 / 25ff838: mov w1, #LUA_GCCOLLECT, x0 = L):
+ * LUA_GCCOUNT instead, and the paced collector hurries. A VM the per-frame routine doesn't step keeps the request */
+void h_gc_request(Ctx *c) {
+    if (gc_mode != 1) return;
+    const u8 *g = (const u8 *)(uintptr_t)*(u64 *)(uintptr_t)(c->x[0] + 0x18);
+    for (int k = 0; k < 4; k++)
+        if (gc_stat[k].g == g) {
+            InterlockedExchange(&gc_hurry[k], 2);
+            InterlockedIncrement(&gc_asked[k]);
+            c->x[1] = 3;
+            return;
+        }
+}
