@@ -9,6 +9,7 @@
 //   dotnet run -- copy <save>\main <other>\main <regex>  blocks named like regex from another save (event data:
 //                                                  "^KBCAT|^KOutbreakBC": delivered raids / outbreaks, active BCAT outbreaks)
 //   dotnet run -- monsdata <save>\main <dir>        the F8 mod's tables, <dir>\mons_*.txt (mons_eggs.txt: PKHeX-checked eggs)
+//   dotnet run -- events <dir>                      PKHeX's past event raids for the events mod, <dir>\events.txt (Events.cs)
 //   dotnet run -- check <save>\main <pk9> [<ID No.> <SID>]  what PKHeX reads from a PK9 the mod made, legality; with a
 //                                                  trainer's ids, whether it is (hatches) shiny for them
 //   dotnet run -- addmon<save>\main <species> <level> <nature> <ability 0-2> <nickname> <m1,m2,m3,m4> <hp/atk/def/spa/spd/spe EVs>
@@ -21,7 +22,8 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using PKHeX.Core;
 
-if (args.Length < 2) { Console.Error.WriteLine("usage: flags <main> <key>... | items <main> <out> | find <main> <regex> | addmon <main> <species> <level> <nature> <ability> <nick> <moves> <evs>"); return 1; }
+if (args.Length < 2) { Console.Error.WriteLine("usage: flags <main> <key>... | items <main> <out> | find <main> <regex> | addmon <main> <species> <level> <nature> <ability> <nick> <moves> <evs> | events <dir>"); return 1; }
+if (args[0] == "events") return Events.Write(args[1]);
 var path = args[1];
 var sav = (SAV9SV)SaveUtil.GetSaveFile(path)!;
 switch (args[0])

@@ -17,13 +17,18 @@
  * nature. The Tera type comes from another fresh generator (NextInt(18), or NextInt(2) between the species' two
  * types). The tables come from the game's files (raiddata.py -> <build>\mods\raids.dat).
  *
+ * Event dens (content 2, 3) take their raid from what the save has delivered (read through the exe's export
+ * violet_raid_delivery; the events mod, F4, delivers others): see pick_event.
+ *
  * The finder searches seeds for a species (and shiny / Tera type) and writes them into dens. After a write the
  * world's crystals are rebuilt through the exe's export violet_raid_refresh (raidgem.c: the own dens removed and
  * placed again from the save by the game's own code; without it a written seed showed only after a restart). The item giver and the mon spawner are mods of their own
  * (mods/items, mods/mons). */
+#include "delivery.h"
 #include "filtercombo.h"
 #include "modkit.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <ctype.h>
 #include <math.h>
@@ -66,7 +71,17 @@ static struct {
     std::vector<std::string> species, moves, abilities, natures, types;
     std::vector<Raid> raids;
     std::vector<u32> table[N_REGIONS][7];   /* indices into raids, per region and stars, in file order */
+    struct Personal { u16 dev, form, national; u8 type1, type2, gender_group, gender_ratio; u16 abilities[3]; };
+    std::vector<Personal> personal;         /* every species and form (raids.dat version 2) */
 } D;
+
+/* The raids delivered to the save (event dens' raids; the events mod and NOTES "Event raids"): the enemy file's
+ * entries with a rate, as raids.dat entries (stars = difficulty, 7 for the Mightiest), in file order, plus each
+ * one's group and fixed IVs. Read from the save while the window is open, not while the finder runs. */
+struct EventRaid { Raid r; int group; bool fixed; int ivs[6]; };
+static std::vector<EventRaid> g_events;
+static std::atomic<bool> g_finding;
+enum { EVENT_BASE = 1 << 20 };              /* Want.raid at or past this: g_events[raid - EVENT_BASE] */
 
 static u32 g_rom = 2;                       /* 1 Scarlet, 2 Violet */
 
@@ -85,8 +100,8 @@ static void load_data(const char *cache_dir) {
     fclose(f);
     size_t p = 8;
     auto u32at = [&](size_t o) { u32 v = 0; if (o + 4 <= b.size()) memcpy(&v, &b[o], 4); return v; };
-    if (got != b.size() || b.size() < 8 || memcmp(b.data(), "NXRD", 4) || u32at(4) != 1) {
-        D.error = std::string(path) + " is not raid data version 1: run raiddata.py again";
+    if (got != b.size() || b.size() < 8 || memcmp(b.data(), "NXRD", 4) || u32at(4) != 2) {
+        D.error = std::string(path) + " is not raid data version 2: run raiddata.py again";
         return;
     }
     std::vector<std::string> *lists[] = {&D.species, &D.moves, &D.abilities, &D.natures, &D.types};
@@ -107,7 +122,64 @@ static void load_data(const char *cache_dir) {
     memcpy(D.raids.data(), &b[p], (size_t)n * sizeof(Raid));
     for (u32 i = 0; i < n; i++)
         if (D.raids[i].region < N_REGIONS && D.raids[i].stars <= 6) D.table[D.raids[i].region][D.raids[i].stars].push_back(i);
+    p += (size_t)n * sizeof(Raid);
+    u32 np = u32at(p);
+    p += 4;
+    static_assert(sizeof(D.personal[0]) == 16, "raids.dat personal entry");
+    if (p + (size_t)np * 16 > b.size()) { D.error = "raids.dat is cut short"; return; }
+    D.personal.resize(np);
+    memcpy(D.personal.data(), &b[p], (size_t)np * 16);
     D.loaded = true;
+}
+
+static const decltype(D.personal)::value_type *personal_of(int dev, int form) {
+    const decltype(D.personal)::value_type *base = nullptr;
+    for (auto &p : D.personal) {
+        if (p.dev != dev) continue;
+        if (p.form == form) return &p;
+        if (p.form == 0) base = &p;
+    }
+    return base;
+}
+
+/* the save's delivered raids into g_events (every 2 s at most; not while the finder runs: it reads them) */
+static void events_update() {
+    static ULONGLONG last;
+    ULONGLONG now = GetTickCount64();
+    if (g_finding || now - last < 2000) return;
+    last = now;
+    std::vector<u8> b;
+    if (delivery::read_part(delivery::ENEMY, b) <= 0) return;
+    std::vector<EventRaid> out;
+    for (const delivery::Entry &e : delivery::parse_enemies(b.data(), b.size())) {
+        if (e.rate <= 0) continue;
+        const auto *p = personal_of(e.dev, e.form);
+        EventRaid x = {};
+        Raid &r = x.r;
+        r.stars = (u8)e.difficulty;
+        r.rom = (u8)e.rom;
+        r.rate = (u8)e.rate;
+        r.national = p ? p->national : 0;
+        r.form = (u16)e.form;
+        r.level = (u8)e.level;
+        r.gem = (u8)e.gem;
+        r.ability_kind = (u8)e.tokusei;
+        r.flawless = (u8)(e.talent_type == 1 ? e.vnum : 0);
+        r.shiny_kind = (u8)e.rare;
+        r.nature = (u8)e.seikaku;
+        if (p) {
+            r.type1 = p->type1; r.type2 = p->type2;
+            r.gender_group = p->gender_group; r.gender_ratio = p->gender_ratio;
+            memcpy(r.abilities, p->abilities, sizeof r.abilities);
+        }
+        for (int k = 0; k < 4; k++) r.moves[k] = (u16)e.moves[k];
+        r.dev = (u16)e.dev;
+        x.group = e.group;
+        x.fixed = e.talent_type == 2;
+        memcpy(x.ivs, e.ivs, sizeof x.ivs);
+        out.push_back(x);
+    }
+    g_events = std::move(out);
 }
 
 /* the dens' area names, "<region> <area> <name>" a line (raiddata.py; without the file the list shows numbers) */
@@ -163,7 +235,7 @@ static int stars_of_roll(u32 r, int progress) {
 }
 
 struct Result {
-    const Raid *raid;                       /* NULL: content not covered (events) or no table */
+    const Raid *raid;                       /* NULL: no table (or no delivered raid for an event den) */
     int stars, tera, ability, nature, gender;   /* gender 0 male, 1 female, 2 none */
     bool shiny;
     int ivs[6];                             /* HP Atk Def SpA SpD Spe */
@@ -173,8 +245,54 @@ struct Result {
 static const u8 amped[] = {0, 2, 3, 4, 6, 8, 9, 11, 13, 14, 19, 22, 24};
 static const u8 lowkey[] = {1, 5, 7, 10, 12, 15, 16, 17, 18, 20, 21, 23};
 
+/* An event den's raid (content 2, 3: e28ab0 -> 01ea86d4, NOTES "Event raids"): the star roll first (only its
+ * draw and the progress' difficulty range [first target, highest target], 7 once 6-star raids are out), then
+ * NextInt(the rates' sum) over the delivered raids for this game, of the den's group and in that range (a den with
+ * no group takes every raid, the range unchecked). The den's group (raid save +0x83a8) isn't read here: every
+ * delivery seen so far, and every one the events mod makes, has all its raids in group 1. */
+enum { EVENT_GROUP = 1 };
+static void event_range(int progress, int *lo, int *hi) {
+    static const int los[5] = {1, 1, 1, 3, 3}, his[5] = {2, 3, 4, 5, 7};
+    int p = progress < 0 ? 0 : progress > 4 ? 4 : progress;
+    *lo = los[p];
+    *hi = his[p];
+}
+
+static bool event_candidate(const EventRaid &x, int lo, int hi, int group) {
+    if (x.r.rom != 0 && x.r.rom != g_rom) return false;
+    return group < 1 || (x.group == group && x.r.stars >= lo && x.r.stars <= hi);
+}
+
+static const EventRaid *pick_event(u32 seed, int progress, int group = EVENT_GROUP) {
+    Xoro r(seed);
+    r.next_int(100);
+    int lo, hi;
+    event_range(progress, &lo, &hi);
+    u32 total = 0;
+    for (const EventRaid &x : g_events) if (event_candidate(x, lo, hi, group)) total += x.r.rate;
+    if (!total) return NULL;
+    u32 roll = r.next_int(total), acc = 0;
+    for (const EventRaid &x : g_events) {
+        if (!event_candidate(x, lo, hi, group)) continue;
+        acc += x.r.rate;
+        if (roll < acc) return &x;
+    }
+    return NULL;
+}
+
+static const EventRaid *event_of(const Raid *r) {
+    if (g_events.empty() || r < &g_events.front().r || r > &g_events.back().r) return NULL;
+    return (const EventRaid *)((const u8 *)r - offsetof(EventRaid, r));
+}
+
 /* the raid only (stars, species): the finder's fast path */
 static const Raid *pick(u32 seed, int region, u32 content, int progress, int *stars_out, Xoro *rest = NULL) {
+    if (content == 2 || content == 3) {
+        const EventRaid *x = pick_event(seed, progress);
+        if (!x) return NULL;
+        *stars_out = x->r.stars;
+        return &x->r;
+    }
     if (region < 0 || region >= N_REGIONS || content > 1) return NULL;
     Xoro r(seed);
     int stars = content == 1 ? 6 : stars_of_roll(r.next_int(100), progress);
@@ -222,6 +340,9 @@ static Result generate(u32 seed, int region, u32 content, int progress) {
     u32 x = (o.pid >> 16) ^ (o.pid & 0xffff) ^ (tid >> 16) ^ (tid & 0xffff);
     o.shiny = e.shiny_kind == 2 || (e.shiny_kind == 0 && x < 16);
     for (int &v : o.ivs) v = -1;
+    const EventRaid *ev = event_of(o.raid);
+    if (ev && ev->fixed)                    /* fixed IVs (the Mightiest): assumed to draw nothing */
+        for (int k = 0; k < 6; k++) o.ivs[k] = ev->ivs[k];
     for (int i = 0; i < e.flawless && i < 6; i++) {
         u32 k;
         do k = r.next_int(6); while (o.ivs[k] != -1);
@@ -400,23 +521,35 @@ static int write_den(int region, u32 index, u32 seed, u32 content, bool enable) 
 
 /* ---------------------------------------------------------------------------------------------- the finder */
 struct Want { int region, progress, raid; bool shiny; int tera; };   /* raid: index into D.raids; tera -1: any */
-static std::atomic<bool> g_finding, g_find_stop;
+static std::atomic<bool> g_find_stop;
 static std::atomic<u64> g_find_tried;
 static std::mutex g_find_lock;
 static std::vector<u32> g_found_seeds;
 static std::string g_find_msg;
 
+/* a Want's raid: raids.dat's, or a delivered one (EVENT_BASE + index into g_events) */
+static const Raid *want_raid(int i) {
+    if (i >= EVENT_BASE) return i - EVENT_BASE < (int)g_events.size() ? &g_events[i - EVENT_BASE].r : NULL;
+    return i >= 0 && i < (int)D.raids.size() ? &D.raids[i] : NULL;
+}
+
+/* the den content a raid needs: 0 normal, 1 black, 2 event, 3 7-star event */
+static u32 content_of(int i) {
+    const Raid *e = want_raid(i);
+    if (i >= EVENT_BASE) return e && e->stars >= 7 ? 3 : 2;
+    return e && e->stars == 6 ? 1 : 0;
+}
+
 static bool matches(u32 seed, const Want &w, u32 content) {
     int stars;
     const Raid *e = pick(seed, w.region, content, w.progress, &stars);
-    if (e != &D.raids[w.raid]) return false;
+    if (!e || e != want_raid(w.raid)) return false;
     if (w.tera >= 0 && tera_of(seed, *e) != w.tera) return false;
     return !w.shiny || shiny_of(seed, *e);
 }
 
 static void find_thread(Want w, u32 count) {
-    const Raid &e = D.raids[w.raid];
-    u32 content = e.stars == 6 ? 1 : 0;
+    u32 content = content_of(w.raid);
     u32 start;
     LARGE_INTEGER t;
     QueryPerformanceCounter(&t);
@@ -551,6 +684,7 @@ static void ui() {
     ImGui::Combo("Story progress", &g_progress, progress_names, 5);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Decides the star levels a den can roll. Set it to your save's, or the list shows the wrong raids.");
 
+    events_update();
     g_have_dens = read_dens(g_region, g_dens);
     u32 nd = region_dens[g_region];
     if (!g_have_dens) ImGui::TextDisabled("No %s dens found: scan again after loading.", region_names[g_region]);
@@ -640,12 +774,12 @@ static void ui() {
             else ImGui::TextDisabled(d.enabled ? "?" : "-");
             if (w.r.raid) {
                 ImGui::TableNextColumn(); ImGui::Text("%d", w.r.stars);
-                ImGui::TableNextColumn(); ImGui::TextUnformatted(name_of(D.species, w.r.raid->dev));
+                ImGui::TableNextColumn(); ImGui::Text("%s%s", name_of(D.species, w.r.raid->dev), d.content >= 2 ? " (event)" : "");
                 ImGui::TableNextColumn(); ImGui::TextUnformatted(name_of(D.types, (u32)w.r.tera));
                 ImGui::TableNextColumn(); ImGui::TextUnformatted(w.r.shiny ? "SHINY" : "");
             } else {
                 ImGui::TableNextColumn(); ImGui::TextUnformatted(d.content == 3 ? "7" : "-");
-                ImGui::TableNextColumn(); ImGui::TextDisabled(d.content >= 2 ? "(event)" : "(none)");
+                ImGui::TableNextColumn(); ImGui::TextDisabled(d.content >= 2 ? "(event: nothing delivered fits)" : "(none)");
                 ImGui::TableNextColumn(); ImGui::TableNextColumn();
             }
             ImGui::TableNextColumn(); ImGui::Text("%08X", d.seed);
@@ -665,7 +799,7 @@ static void ui() {
         Result r = unused ? Result{} : generate(d.seed, g_region, d.content, g_progress);
         if (r.raid) stats_line(r);
         else ImGui::TextDisabled("Den %d: %s", g_sel, unused ? "an unused slot (no den in the world)"
-                                                  : d.content >= 2 ? "an event raid (not covered)" : "no raid");
+                                                  : d.content >= 2 ? "an event den, but no delivered raid fits it" : "no raid");
         if (const RaidPoint *pt = unused ? nullptr : point_of(g_region, d)) {
             const char *an = d.area < 32 ? g_area_names[g_region][d.area].c_str() : "";
             if (have_me)
@@ -679,8 +813,10 @@ static void ui() {
         ImGui::InputText("Seed (hex)", g_seed_text, sizeof g_seed_text, ImGuiInputTextFlags_CharsHexadecimal);
         ImGui::SameLine();
         static int content = 0;
-        ImGui::SetNextItemWidth(160);
-        ImGui::Combo("##content", &content, "Normal crystal (1-5 stars)\0Black crystal (6 stars)\0");
+        ImGui::SetNextItemWidth(200);
+        ImGui::Combo("##content", &content, "Normal crystal (1-5 stars)\0Black crystal (6 stars)\0Event crystal\0"
+                                            "Event crystal (7 stars)\0");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Event crystals take their raid from what is delivered (the Events window, F4).");
         ImGui::SameLine();
         if (ImGui::Button("Write to this den")) {
             u32 s = (u32)strtoul(g_seed_text, NULL, 16);
@@ -694,11 +830,9 @@ static void ui() {
 
     ImGui::SeparatorText("Put a chosen Pokemon in a den");
     char preview[96] = "(choose)";
-    if (g_want.raid >= 0 && g_want.raid < (int)D.raids.size()) {
-        const Raid &e = D.raids[g_want.raid];
-        snprintf(preview, sizeof preview, "%s  %d stars%s", name_of(D.species, e.dev), e.stars,
-                 e.form ? " (form)" : "");
-    }
+    if (const Raid *e = want_raid(g_want.raid))
+        snprintf(preview, sizeof preview, "%s  %d stars%s%s", name_of(D.species, e->dev), e->stars,
+                 e->form ? " (form)" : "", g_want.raid >= EVENT_BASE ? " (event)" : "");
     ImGui::SetNextItemWidth(320);
     static FilterCombo fc_raid, fc_tera;
     if (fc_raid.begin("Pokemon", preview)) {
@@ -712,6 +846,20 @@ static void ui() {
                          e.level, e.rate / 100, i);
                 if (fc_raid.item(nm, g_want.raid == (int)i, lbl)) g_want.raid = (int)i;
             }
+        int lo, hi;                         /* delivered raids, with their share at the chosen progress */
+        event_range(g_progress, &lo, &hi);
+        u32 total = 0;
+        for (const EventRaid &x : g_events) if (event_candidate(x, lo, hi, EVENT_GROUP)) total += x.r.rate;
+        for (size_t k = 0; k < g_events.size(); k++) {
+            const Raid &e = g_events[k].r;
+            if (e.rom != 0 && e.rom != g_rom) continue;
+            const char *nm = name_of(D.species, e.dev);
+            char lbl[128];
+            bool in = event_candidate(g_events[k], lo, hi, EVENT_GROUP);
+            snprintf(lbl, sizeof lbl, "%s  %d stars%s  Lv.%u  (event, %u%%)##e%zu", nm, e.stars, e.form ? " (form)" : "",
+                     e.level, in && total ? e.rate * 100 / total : 0, k);
+            if (fc_raid.item(nm, g_want.raid == EVENT_BASE + (int)k, lbl)) g_want.raid = EVENT_BASE + (int)k;
+        }
         fc_raid.end();
     }
     ImGui::Checkbox("Shiny", &g_want.shiny);
@@ -728,7 +876,13 @@ static void ui() {
     }
 
     bool reachable = true;
-    if (g_want.raid >= 0) {
+    if (g_want.raid >= EVENT_BASE) {
+        int lo, hi;
+        event_range(g_progress, &lo, &hi);
+        const EventRaid *x = g_want.raid - EVENT_BASE < (int)g_events.size() ? &g_events[g_want.raid - EVENT_BASE] : NULL;
+        reachable = x && event_candidate(*x, lo, hi, EVENT_GROUP);
+        if (!reachable) ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "Not delivered any more, or its star level isn't open at this story progress.");
+    } else if (g_want.raid >= 0) {
         const Raid &e = D.raids[g_want.raid];
         if (e.stars < 6) {
             reachable = false;
@@ -759,8 +913,7 @@ static void ui() {
         std::lock_guard<std::mutex> l(g_find_lock);
         if (!g_finding && !g_found_seeds.empty()) {
             ImGui::Text("%s", g_find_msg.c_str());
-            const Raid &e = D.raids[g_want.raid >= 0 ? g_want.raid : 0];
-            u32 content = e.stars == 6 ? 1 : 0;
+            u32 content = content_of(g_want.raid);
             ImGui::SameLine();
             if (g_have_dens && ImGui::Button(g_found_seeds.size() == 1 ? "Write to the selected den" : "Write to every den")) {
                 int dens = 0, copies = 0;

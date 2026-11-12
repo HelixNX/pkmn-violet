@@ -17,12 +17,16 @@ Schemas (FlatBuffers; field = vtable slot, a missing field is its default 0):
     {u32 offset, u16 length, u16 flags} a line; each line's u16s XOR a key that starts at 0x7C89 + line * 0x2983
     and rotates left 3 bits a character.
 
-raids.dat (little-endian): "NXRD", u32 version 1; five name lists (species by the game's internal number (DevID: the National Dex up to Gen 8, not after), moves, abilities,
+raids.dat (little-endian): "NXRD", u32 version 2; five name lists (species by the game's internal number (DevID: the National Dex up to Gen 8, not after), moves, abilities,
 natures, types), each u32 count then {u16 length, UTF-8}; u32 count of raid entries, 38 bytes each:
   u8 region (0 Paldea, 1 Kitakami, 2 Blueberry), stars, rom, rate; u16 national, form; u8 level, gem, ability
   kind, flawless; u8 shiny kind, nature (0 random), type 1, type 2; u8 gender group, gender ratio, 0, 0;
   u16 abilities[3]; u16 moves[4]; u16 DevID, 0
-in each table's order (the rate roll walks them in order).
+in each table's order (the rate roll walks them in order); then u32 count of personal entries, 16 bytes each (every
+species and form, for event raids): u16 DevID, form, national; u8 type 1, type 2, gender group, gender ratio;
+u16 abilities[3].
+
+<build>/mods/raid_templates.txt: the events mod's battle settings per star level (templates() below).
 
 <build>/mods/raid_areas.txt: "<region> <area> <name>" a line, the dens' area numbers named from place_name.dat
 (AREA_LINES below: which line names which area).
@@ -108,6 +112,60 @@ def personal(t):
     return out
 
 
+# The battle settings of a raid entry (RaidEnemyInfo slots 5-8 and the tables in 10-12), as the events mod builds
+# deliveries with them: struct formats per slot of each table.
+SIZE_FMT = ['<i', '<h', '<i', '<h', '<i', '<h']
+DESC_FMT = ['<h', '<b', '<b', '<h', '<b', '<h', '<H', '<b', '<b', '<b', None, None, None, None, None, None, '<b', '<b', '<b']
+EXTRA_FMT = ['<h', '<h', '<h', '<H']
+TIME_FMT = ['<B', '<i', '<i', '<i', '<i', '<i', '<i']
+WAZA_ACT = 3
+
+
+def scalars(b, pos, fmts):
+    f = fields(b, pos)
+    return [val(b, pos, f, k, fm) if fm else 0 for k, fm in enumerate(fmts)]
+
+
+def template(b, info):
+    """one entry's battle settings as numbers: drop tables, capture, size (6), boss (10 + 6 x 4 extra actions + 3;
+    the moves the template's species uses dropped), time (7)"""
+    fi = fields(b, info)
+    row = [val(b, info, fi, 5, '<Q'), val(b, info, fi, 6, '<Q'), val(b, info, fi, 7, '<b'), val(b, info, fi, 8, '<b')]
+    row += scalars(b, _ref(b, info + fi[10]), SIZE_FMT) if fi[10] else [0] * 6
+    if fi[11]:
+        d = _ref(b, info + fi[11])
+        fd = fields(b, d)
+        ds = scalars(b, d, DESC_FMT)
+        ds[6] = 0                           # powerChargePenaltyAction: a move of that species
+        row += ds[:10]
+        for k in range(10, 16):
+            ex = scalars(b, _ref(b, d + fd[k]), EXTRA_FMT) if fd[k] else [0] * 4
+            row += [0] * 4 if ex[1] == WAZA_ACT else ex
+        row += ds[16:19]
+    else:
+        row += [0] * 37
+    row += scalars(b, _ref(b, info + fi[12]), TIME_FMT) if fi[12] else [0] * 7
+    return row
+
+
+def templates(t, out):
+    """<build>/mods/raid_templates.txt: "<stars> <numbers>..." a line (template() order), from Paldea's first raid of
+    each star level that both games have; 7 stars reuse 6 (the mod raises the boss's HP)"""
+    lines = []
+    for stars in range(1, 7):
+        path = 'world/data/raid/raid_enemy_{s:02d}/raid_enemy_{s:02d}_array.bin'.format(s=stars)
+        b = t.read(path)
+        for e in entries(b):
+            info = _ref(b, e + fields(b, e)[0])
+            if val(b, info, fields(b, info), 0, '<h') == 0:
+                lines.append('%d %s\n' % (stars, ' '.join(str(x) for x in template(b, info))))
+                break
+    p = os.path.join(out, 'raid_templates.txt')
+    with open(p, 'w') as f:
+        f.writelines(lines)
+    print('%s: %d star levels' % (p, len(lines)))
+
+
 def main():
     t = Trinity()
     pers = personal(t)
@@ -158,9 +216,10 @@ def main():
             for area, line in sorted(lines.items()):
                 if line < len(places) and places[line]:
                     f.write('%d %d %s\n' % (region, area, places[line]))
+    templates(t, out)
     path = os.path.join(out, 'raids.dat')
     with open(path, 'wb') as f:
-        f.write(b'NXRD' + struct.pack('<I', 1))
+        f.write(b'NXRD' + struct.pack('<I', 2))
         for lst in names:
             f.write(struct.pack('<I', len(lst)))
             for s in lst:
@@ -168,6 +227,9 @@ def main():
                 f.write(struct.pack('<H', len(u)) + u)
         f.write(struct.pack('<I', len(rows)))
         f.write(b''.join(rows))
+        f.write(struct.pack('<I', len(pers)))
+        for (dev, form), p in sorted(pers.items()):
+            f.write(struct.pack('<3H4B3H', dev, form, p['national'], p['t1'], p['t2'], p['ggroup'], p['gratio'], *p['abil']))
     print('%s: %d raids, %d species names' % (path, len(rows), len(names[0])))
     # the wild encounter tables as the game has them, for F8's wild spawns (mons.cpp finds them in memory)
     for sub in ('', '_su1', '_su2'):

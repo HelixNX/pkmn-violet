@@ -20,9 +20,18 @@
  * each through e26fec, the raid picked from the seed; with force (or M+0x1661) it rerolls the dens first.
  * A refresh here: remove the own entries (group 0) the game's way, wait until the update has erased them, call
  * e23ec8(M, 0) and set the reflect flag. Hooked after `mov x19, x0` in the update (main+2933398), on the game's
- * thread. */
+ * thread.
+ *
+ * Event deliveries (the events mod, exports violet_raid_delivery / violet_raid_deliver; NOTES "Event raids"): the raid
+ * save object (the save list at *(*(main+46d4ca0)) +0x1c0..+0x1c8, the entry e280dc(obj + 0x28) says is the raid
+ * one) holds the delivered files at +0xe308 enemies, +0xe340 fixed rewards, +0xe378 lottery rewards, +0xe3b0
+ * priority, +0xe300 the identifier. A delivery goes in through the setters BcatClient uses, in its order, on this
+ * thread: each copies the file into the save and points the manager's resource at it again. A new priority
+ * versionNo makes the game reroll the dens with the new events by itself; otherwise the dens are rebuilt from the
+ * save (the refresh above) so that event dens pick from the new entries. */
 #include "hos.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <windows.h>
 
@@ -36,11 +45,110 @@
 #define GEM_REFLECT 0x1662
 #define ENTRY_SIZE 0xa0
 #define WAIT_MAX 300                    /* updates to wait for the old crystals to go */
+#define SAVE_LIST_PP (MAIN + 0x46d4ca0) /* -> the save list singleton's slot */
+#define SAVE_IS_RAID (MAIN + 0xe280dc)  /* (obj + 0x28): the raid save object? */
+#define SAVE_IDENT 0xe300
 
 static volatile LONG refresh_req;
 static volatile LONG64 manager;
 static volatile LONG logged;
 static int waiting;                     /* game thread: updates since the own entries were marked; 0 = idle */
+
+/* the delivered files: enemies, fixed rewards, lottery rewards, priority */
+enum { DELIV_PARTS = 4 };
+static const u32 deliv_off[DELIV_PARTS] = {0xe308, 0xe340, 0xe378, 0xe3b0};
+static const u32 deliv_size[DELIV_PARTS] = {30000, 27456, 53464, 88};
+static const u64 deliv_set[DELIV_PARTS] = {MAIN + 0x1d93018, MAIN + 0x1d933a0, MAIN + 0x1d931dc, MAIN + 0x1d92c24};
+static volatile LONG64 raid_save;       /* the raid save object (0: not found yet) */
+static SRWLOCK deliv_lock = SRWLOCK_INIT;
+static u8 *deliv_new[DELIV_PARTS];      /* queued parts (NULL: keep) */
+static volatile LONG deliv_req, deliv_done;
+
+/* a delivered file into out (which 0-3 as above, 4: the 4-byte identifier); returns its size, 0 when the raid save
+ * isn't known yet or out is too small */
+__declspec(dllexport) int violet_raid_delivery(int which, void *out, int max) {
+    u8 *s = (u8 *)(uintptr_t)raid_save;
+    if (!s || which < 0 || which > DELIV_PARTS) return 0;
+    if (which == DELIV_PARTS) {
+        if (max < 4) return 0;
+        memcpy(out, s + SAVE_IDENT, 4);
+        return 4;
+    }
+    u8 *buf = *(u8 **)(s + deliv_off[which]);
+    if (!buf || max < (int)deliv_size[which]) return 0;
+    AcquireSRWLockShared(&deliv_lock);
+    memcpy(out, buf, deliv_size[which]);
+    ReleaseSRWLockShared(&deliv_lock);
+    return (int)deliv_size[which];
+}
+
+/* queue a delivery (parts[i] NULL: keep that file; each as long as the file: 30000, 27456, 53464, 88 bytes); applied
+ * at the crystal manager's next update. Returns how many deliveries were applied so far (parts NULL: only that),
+ * -1 when the raid save isn't known yet (not in the field). */
+__declspec(dllexport) int violet_raid_deliver(const void *const *parts) {
+    if (!parts) return (int)deliv_done;
+    if (!raid_save || !manager) return -1;
+    AcquireSRWLockExclusive(&deliv_lock);
+    for (int i = 0; i < DELIV_PARTS; i++) {
+        free(deliv_new[i]);
+        deliv_new[i] = NULL;
+        if (parts[i] && (deliv_new[i] = (u8 *)malloc(deliv_size[i]))) memcpy(deliv_new[i], parts[i], deliv_size[i]);
+    }
+    ReleaseSRWLockExclusive(&deliv_lock);
+    InterlockedExchange(&deliv_req, 1);
+    return (int)deliv_done;
+}
+
+static u64 gcall2(Ctx *c, u64 fn, u64 a0, u64 a1) {
+    Ctx saved = *c;
+    c->x[0] = a0;
+    c->x[1] = a1;
+    guest_call(c, fn);
+    u64 r = c->x[0];
+    *c = saved;
+    return r;
+}
+
+/* game thread: the raid save object from the save list (looked for until found, now and then) */
+static void find_raid_save(Ctx *c) {
+    static u32 tries;
+    if (raid_save || tries++ % 60) return;
+    u64 *slot = *(u64 **)(uintptr_t)SAVE_LIST_PP;
+    u8 *list = slot ? (u8 *)(uintptr_t)*slot : NULL;
+    if (!list) return;
+    for (u64 *p = *(u64 **)(list + 0x1c0); p && p < *(u64 **)(list + 0x1c8); p++) {
+        if (!*p || !(gcall2(c, SAVE_IS_RAID, *p + 0x28, 0) & 1)) continue;
+        u8 *s = (u8 *)(uintptr_t)*p;
+        InterlockedExchange64(&raid_save, (LONG64)(uintptr_t)s);
+        u32 ident;
+        memcpy(&ident, s + SAVE_IDENT, 4);
+        hlog(0, "raidgem: raid save at %llx, delivery identifier %u, enemies at %llx", (unsigned long long)*p, ident,
+             (unsigned long long)*(u64 *)(s + deliv_off[0]));
+        return;
+    }
+}
+
+/* game thread: a queued delivery through the game's setters */
+static void deliver(Ctx *c, u8 *m) {
+    u8 *s = (u8 *)(uintptr_t)raid_save;
+    u32 before, after;
+    memcpy(&before, s + SAVE_IDENT, 4);
+    AcquireSRWLockExclusive(&deliv_lock);
+    int n = 0;
+    for (int i = 0; i < DELIV_PARTS; i++) {
+        if (!deliv_new[i]) continue;
+        gcall2(c, deliv_set[i], (u64)(uintptr_t)m, (u64)(uintptr_t)deliv_new[i]);
+        free(deliv_new[i]);
+        deliv_new[i] = NULL;
+        n++;
+    }
+    ReleaseSRWLockExclusive(&deliv_lock);
+    memcpy(&after, s + SAVE_IDENT, 4);
+    InterlockedIncrement(&deliv_done);
+    hlog(0, "raidgem: delivery of %d file(s), identifier %u -> %u%s", n, before, after,
+         after != before ? ": the game rerolls the dens" : ": dens rebuilt from the save");
+    if (after == before) InterlockedExchange(&refresh_req, 1);
+}
 
 /* the mod's side: what != 0 asks for a rebuild; returns the manager's address (0: no update seen yet: not in the
  * field) */
@@ -134,6 +242,8 @@ void h_raidgem_update(Ctx *c) {
     }
     int gems;
     static u32 tick;
+    find_raid_save(c);
+    if (!waiting && raid_save && InterlockedExchange(&deliv_req, 0)) deliver(c, m);
     if (!waiting && tick++ % 30 == 0) points_copy(m);
     if (!waiting) {
         if (!InterlockedExchange(&refresh_req, 0)) return;
