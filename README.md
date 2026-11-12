@@ -17,7 +17,7 @@ recompilation and with a real Switch through [ldn-beacon](https://github.com/Hel
 | Frame rate | any (30, 60, 120, uncapped) at normal game speed; ~170 fps uncapped on an RX 7800 XT, ~70-80 on a GTX 1650 Ti laptop |
 | Render scale | 1-4x, switchable while playing |
 | Local play (Union Circle, Tera raids, link trades) | **works** over rooms (the protocol Citra, yuzu and Eden rooms speak), between recompilations and with a real Switch through ldn-beacon |
-| Event raids | a delivery copied from another save shows up after a restart (no Nintendo servers) |
+| Event raids | a delivery copied from another save shows up after a restart (no Nintendo servers); the Events mod delivers past events in game (untested) |
 | Known issues | some letters missing in text (a likely fix awaits checking), no rain streaks near the camera |
 | GPUs | Vulkan 1.3 with 32-wide compute subgroups and dynamic vertex input; tested on an NVIDIA GTX 1650 Ti and an AMD RX 7800 XT. Older GPUs (e.g. RX 580) are not supported yet |
 
@@ -90,7 +90,8 @@ or item written by a mod is in your save once the game saves. `NX_MODS=0` starts
 
 | Key | Mod | |
 |---|---|---|
-| F6 | Tera raids | every den's raid from its seed; write seeds for a chosen species, shiny, Tera type |
+| F4 | Events | deliver past event Tera raids (PKHeX's lists) or delivery files to the save, live |
+| F6 | Tera raids | every den's raid from its seed (event dens too); write seeds for a chosen species, shiny, Tera type |
 | F7 | Items | give or set any item; a Lua console in the game's own script VM |
 | F8 | Pokémon | a made-to-order mon or egg into your boxes; wild spawns as a chosen species (shiny, IVs, moves...); spawn groups on you; the trainer ids of your boxed mons |
 | F9 / F10 | Weather | toggle rain; set any weather |

@@ -315,6 +315,53 @@ MUTABLE_FORMAT only with a format list (NX_MUTABLE_ALL=1 old); passes kept over 
 (NX_SAME_RT=0 off); frame stalls (1% lows 20-47 ms at 60 -> locked 60): new pipelines off the draw, pool imports
 outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer per draw removed (switches read once).
 
+### Frame stalls at 60 / 120 capped, 2x (2026-11-12, user sessions with NX_HITCH_MS, RX 7800 XT)
+
+- **Lua's collector was the 40-150 ms main-thread stall** (main holds its core, nothing else busy; one every 45-75
+  s). The game keeps the collector stopped and drives it once a frame (`main+c8c36c`: `lua_gc` = `main+c8c520`,
+  variadic; STEP then STOP; COLLECT after 300 s without a full one, timer at `7104759d08`, flag `[71046cb850]` set
+  by any full collection). Generational mode (the VM starts incremental with `lastatomic` set, i.e. generational
+  after a bad major collection, and turns generational within the title): young collections only, old garbage
+  grows from ~57 MB to the allocator's limit (~70 MB), then `luaM_` calls `luaC_fullgc(L, 1)` (`main+2b690`;
+  `fullgen` `main+2b840`, `luaC_step` `main+2ac30`, `luaS_newlstr` `main+3be00`). global_State: totalbytes +10,
+  GCdebt +18, GCestimate +20, lastatomic +28, currentwhite +64, gcstate +65, gckind +66, genminormul +68,
+  genmajormul +69, gcrunning +6a, gcemergency +6b. **Fix (lua.c, patches.txt; `NX_LUA_GC=0` off):** hooks beside
+  the routine's STEP call switch the VM to incremental (pause 100, step multiplier 12) and step 1 KB over the
+  debt; the 300 s COLLECT becomes COUNT. Field, 120 fps: 2.7-3.5 MB/s allocated, steps 0.27-0.33 ms a frame
+  (generational at the title: 0.14), longest 6-8 ms (once a cycle, about every 2 s: open, probably the atomic
+  phase), heap 58-65 MB, no emergency collection in 9 minutes. `lua: ` lines every 3600 steps and at each full
+  collection. Forcing STEP data 1 without leaving "declared generational" made every step a whole mark and the
+  heap sit at 60+ MB: the switch must clear `lastatomic` (lua_gc INC does).
+- **Present jitter:** a frame was presented when its work was done, so 7% of frames at 60 were 2-8 ms late on
+  screen while `nvn: frame time` (measured after the pacing sleep) said 16.67. `hold_present` (nvn.c) holds a
+  finished frame until the longest recent work + 0.3 ms after its tick (at most 3/4 of the period;
+  `NX_PRESENT_HOLD=0` off): 7% -> ~1%. The `gpu: slow frame` line measures present to present, `nvn: frame time`
+  tick to tick: read both.
+- **Host imports freed on their own thread** (gpu.c `junk_loop`): vkFreeMemory of an import (FreeGpuVirtualAddress /
+  DestroyAllocation2) was 17% of the render thread's samples in slow frames. Effect on the 20-125 ms translation
+  spikes with nothing attributed: not measured apart yet.
+- **The game's own full collections were the 50-70 ms hitch every 4-12 s** (the 60 fps session of 2026-11-12,
+  `build/run-session-1112.log`: 214 of the ~560 frames over 25 ms, main holding its core, a `luaC_fullgc(emergency
+  0) from main+c8c5dc` line before each). `main+25ff7d0` takes the VM's lock and calls `lua_gc(L, LUA_GCCOLLECT)`
+  (`25ff818` tail call / `25ff83c`); it is reached through the function pointer at `[main+46d3928]` (`if (p->fn)
+  p->fn(p + 0x20)`) from 14 places that let go of script objects (most often `c50e14`, `c31b54`, `ff172c`). Its
+  neighbour `main+1107154` is `lua_gc(L, LUA_GCGEN, 0, 0)`. **Fix (lua.c `h_gc_request`, patches.txt; built
+  2026-11-12, booted to the title, not played yet):** the request becomes LUA_GCCOUNT and the paced collector
+  hurries (200 KB a step, ~2 ms a frame) until two cycles have ended, so what was let go is freed within about
+  half a second. `NX_LUA_GC=2` keeps the paced steps with the game's full collections. The `lua: collector` line
+  now counts the requests. To check in play: no `luaC_fullgc` lines from `c8c5dc`, `longest` under ~3 ms, heap
+  still 58-65 MB, and nothing that depended on the collection being done at once (objects' finalisers run up to
+  half a second later).
+- Rest of that session's frames over 25 ms (after the title): 158 with all threads busy (loading), 85 presenting,
+  60 shader loads, 24 GPU wait, 7 pipelines, 7 uploads. **Presenting 20-37 ms** comes in runs of 10-40 frames and
+  is inside `vk_present` between the acquire and the submit (fence, acquire, submit all ~0): recording the
+  present's commands, i.e. the downscale pass, the overlay or the menu / mods' ImGui draw. Not split yet: time
+  `ui_draw` / `mods_draw` apart in `vk_present_times` and note whether a mod window was open.
+- Still open at 120, 2x: GPU busy 7-9 ms in some areas (GPU-bound there; 1,132 of 1,538 slow frames were GPU
+  wait); translation spikes with no cause in the slow-frame line (~25 a session over 15 ms); presenting 15-25 ms
+  (53 frames); single shader loads of 34-36 ms. NX_PROFILE's report is a ~200 ms hitch every 600 frames.
+- The lifter patches no branch instructions (`bl`): hook the instruction before (`after`) and change the arguments.
+
 ### Ruled out (measured, no gain)
 
 Deferring NVN barriers; skipping skinning `vs 44f2ec77`; no barrier at pass ends (also corrupts lighting); CPU_NO_ACCESS
@@ -451,6 +498,11 @@ Kernel / I/O:
 - nxrecomp `runtime/nxmod.h` + `mods.c`: DLLs in `<exe>\mods\` (NX_MODS=0 none) get window events, can hold input, draw
   over the swapchain; `modkit/` = Dear ImGui (vcpkg `imgui[vulkan-binding]`; not its SDL3 backend: events on the
   window thread, drawing on the render thread). `nx_mod()` in nxrecomp.cmake; the game exe depends on every mod.
+- **Mods' settings** (nxmod.h version 5, 2026-11-12): `host->setting_get / setting_set (+ _int)` keep values in
+  `settings.ini` as `mod.<key>` (options.c's store; written within a frame or two). First user: F8's "All spawns
+  shiny" and "No contact battles" (`mod.mons.all_shiny`, `mod.mons.no_battles`), put back in `nx_mod_init`.
+  Checked: a seeded `mod.mons.all_shiny=1` logs `wild: all spawns shiny on` at start and all five mods load.
+  Ticking the box and restarting is the user's check.
 - **Lua bridge** (nxmod.h version 3): `host->run_script(text, done, ud)`; a chunk returning `NXMOD_SCRIPT_AGAIN` retries
   later; `--quiet` chunks aren't logged on success. `violetrecomp/lua.c` + patches.txt `after lua_pcall_entry` at
   b5ddd0. Lua C API in main: lua_load `232e0`, getS `24b90`, lua_gettop `b5d980`, lua_settop `b5db00`,
@@ -525,6 +577,117 @@ Seeds written with F6 showed only after a restart. Found with Ghidra (`build/ghi
   clock set inside the event window (a mon's met date is the catching console's date; no time stored); 7-star bosses
   are one per save. PKHeX's EncounterDist9 / EncounterMight9 carry no dates (only an event index), so it doesn't check
   the met date against the event.
+- **How the game uses a delivery** (Ghidra 2026-11-11, `build/ghidra_ev*.txt` copies of the scratch runs):
+  - **Schemas** are in the romfs: `world/data/raid/delivery_raid_enemy/delivery_raid_enemy_array.bfbs` and
+    `delivery_raid_priority/delivery_raid_priority_array.bfbs`; rewards use `raid_{fixed,lottery}_reward_item/*.bfbs`.
+    Read them with `tools/bfbs.py x <path>`.
+  - **Enemy array:** `{values: [{raidEnemyInfo}]}`. Info fields: 0 romVer (0 both, 1 Scarlet, 2 Violet), 1 no, 2
+    deliveryGroupID (byte), 3 difficulty (int), 4 rate (byte, signed in the sum), 5 / 6 dropTableFix / Random (u64
+    table_name), 7 captureRate, 8 captureLv, 9 bossPokePara (PokeDataBattle, same slots as the romfs raid tables),
+    10 bossPokeSize, 11 bossDesc (RaidBossData: shield / extra actions), 12 raidTimeData.
+  - **Priority array:** `{values: [{versionNo int, deliveryGroupID {groupID_01..10 bytes}}]}`.
+  - The friend's enemy array is 72 entries: entry 0 is the Rillaboom, the other 71 are placeholders with every field
+    written.
+  - **Raid save object** (the one with dens at +0x50 / +0xcd8 / +0x1958) holds pointers to the delivery buffers:
+    +0xe308 enemy (0x7530 bytes), +0xe340 fixed rewards, +0xe378 lottery rewards, +0xe3b0 priority. +0xe300 is the
+    identifier. +0x83a8 is an int per den: its event group (below 1 = any).
+  - **Setters** (BcatClient 1d7c458 calls them in this order, M = the crystal manager of raidgem.c):
+    1d93018(M, data) enemy, 1d933a0 fixed, 1d931dc lottery, 1d92c24 priority. Each one copies `data` into the save
+    buffer, then re-points the resource via 01eaa4e0(res, &buffer): res+0x120/0x128/0x130 become the FlatBuffer view
+    (root table at +0x128). The resources are M+0x1668 enemy, +0x1678 fixed, +0x1688 lottery, +0x1698 priority;
+    01189558(obj + 0xe0) looks one up, +0x11a = loaded.
+  - The priority setter stores the old identifier in M+0x16a8 and writes versionNo as the new one (01eaa618). The
+    update (01d93564) then sees the change and posts RaidGemForceLottery: the dens are rerolled with the new events.
+  - **A den's raid** (e23ec8 -> e26fec -> e28ab0): standard dens take `Xoro(seed)`, then 012457e4 rolls the star
+    target for the story progress (e2826c: 0-4 from FSYS_RAID_DIFFICTLTY3..6_RELEASE). Event dens (content 2 / 3,
+    group from +0x83a8) roll the same star target first (only to burn the RNG and get the progress' difficulty
+    range [first target's, highest target's]; the max becomes 7 once 6 stars are out). Then 01ea8504 -> 01ea86d4
+    walks the delivered entries in order:
+    - skips an entry whose romVer is for the other game;
+    - with a group, skips an entry whose deliveryGroupID differs or whose difficulty is outside the range;
+    - sums the rates, takes NextInt(sum) on the same generator, and picks the entry where the running sum passes it.
+    This is PKHeX's dist behaviour.
+  - Rewards: 01ea9788 looks a table_name up in the romfs reward tables (M+0x1650) first, then the delivered ones
+    (M+0x1688). A made-up delivery can point its drop tables at the romfs ones.
+- **Events mod (F4, `mods/events/events.cpp`, 2026-11-11, built, not run yet).** It delivers live through
+  raidgem.c's exports. `violet_raid_delivery(which, out, max)` reads a file out of the raid save object, which
+  raidgem.c finds through the save list and e280dc. `violet_raid_deliver(parts[4])` queues new files for the setters
+  on the game thread. With an unchanged identifier, the dens are rebuilt afterwards.
+  - Shared reader / writer: `mods/common/delivery.h`. It is a small FlatBuffers writer that leaves zeros out and
+    shares vtables and equal sub-tables (2026-11-11). Table fields are queued and written after the tree,
+    breadth first, and a copy is reused only when it lies after the field pointing at it (uoffset_t is unsigned).
+    Check (a scratch program on delivery.h): the friend's 72 entries rebuild field for field, in 28,264 bytes
+    unshared and 1,816 shared (its 71 placeholders are equal). All 230 PKHeX raids built as the mod builds them
+    (templates) round-trip in 28,362 of the 30,000 bytes, ~123 a raid (unshared: 105 fit, ~298 a raid).
+  - **No entry cap** in what the game does with a delivery: 027bab80 (re-pointing the resource) only builds the
+    view (root table, schema object), with no verifier and no size or count check. 01ea86d4 walks the whole `values`
+    vector through the reflection accessors. BcatClient checks only the file size (30,000). Other readers of the
+    enemy resource (if any) not checked.
+  - **When events ran:** `mods/events/event_dates.csv` (committed, hand-made from Serebii's event list and event
+    pages through the web-fetch agent, 2026-11-11; 241 rows). Columns start, end, event, species, form, stars, tera,
+    version, shiny, pkhex. A row matches every PKHeX raid of its species and stars whose form, Tera, game and
+    shininess don't contradict it. pkhex (`D2` / `M1`: events.txt's kind and index, shown in the Pokemon cell's
+    tooltip) narrows it further. The index isn't unique per delivery (Salamence D1 and Rayquaza D1 share it).
+    Built to `build/cmake/mods/violet_events/` (game.cmake POST_BUILD); package.ps1 copies a mod's own folder.
+    Matching (scratch replica): 214 of 230 raids dated. Undated: one group of 4-5 stars (Gengar, Gyarados,
+    Bronzong, Lucario, Florges, Mimikyu, D2) not on Serebii's list. Rows without a raid: the 2025 shiny Ruinous
+    legends (not in PKHeX 26.10.18's lists). Gaps in the CSV: second-week Blissey of the 2024 Mighty events; some
+    reruns the index leaves out (only some 2026 ones filled in).
+  - **Game clock:** `<cache dir>\clock.txt` (Unix seconds on the first line) starts the game's clock there at every
+    start (nxrecomp time.c, after NX_TIME). The Events window writes it ("Game clock": a date from the Ran column,
+    noon local) and removes it ("Back to real time").
+  - Data:
+    - `svedit events <dir>` writes `events.txt`: PKHeX's Encounters9.Dist (174) and .Might (56) in the game's
+      terms, DevID through SpeciesConverter.GetInternal9.
+    - raiddata.py writes `raid_templates.txt`: Paldea's first both-games raid per star level, giving drop tables,
+      capture rate, size, bossDesc (WAZA extra actions and the charge penalty move dropped) and time data.
+    - raids.dat is version 2 and adds a personal table (DevID, form → national, types, gender, abilities).
+  - A built entry:
+    - the mon comes from PKHeX: talentType VALUE with fixed IVs, else V_NUM;
+    - the rest comes from the template of its star level; 7 stars use 6's template with hpCoef 3500 (the
+      Rillaboom's);
+    - captureLv = level, deliveryGroupID 1, no = identifier * 100 + n;
+    - the priority is {identifier, groupID_01 = "Event dens"}.
+  - **Unverified guesses:**
+    - groupID_N is the number of dens a reroll makes group N (the friend's 7-star delivery has 1);
+    - F6 assumes event dens are group 1 and doesn't read +0x83a8;
+    - fixed IVs draw nothing from the RNG;
+    - the progress' difficulty range (raids.cpp event_range) is taken from PKHeX's star thresholds.
+  - F6 shows delivered raids in its den list and picker ("(event)") and finds seeds for them. Den content 2 / 3 is in
+    its write combo.
+  - Backups: the save's delivery when the mod first reads it goes to `build/events/backup-<identifier>/`, as BCAT
+    file names. Any such folder (or one with `raid/`) can be delivered from the window.
+- **Event outbreaks** (Ghidra 12.1.3 on the data drive, `-Ghidra <dir>`; 2026-11-11):
+  - BCAT files `encountOutbreak/{pokedata,zone_main,zone_su1,zone_su2}_array_3_0_0`. Save blocks
+    KBCATOutbreakPokeData 6C1A131B (3,608 = 0xe18), KBCATOutbreakZonesPaldea 3FDC5DFF / Kitakami F9F156A3 /
+    Blueberry 1B45E41C (768 = 0x300 each), KBCATOutbreakEnabled 61552076 (Bool). Active ones: KOutbreakBC01..10
+    {Main,DLC1,DLC2}{CenterPos, DummyPos, Species, Form, Found, NumKOed, TotalSpawns, Materials, DeliveryID (u64),
+    DeliveryZoneID (byte), DeliveryPokeID (byte)}, KOutbreakBC{Main,DLC1,DLC2}NumActive.
+  - **Schemas** (romfs; found by checking guessed paths' FNV hashes against data.trpfd's list, as trinity.py's
+    `has()` does):
+    `world/data/encount/delivery_outbreak/delivery_outbreak_{pokedata,zone_main,zone_su1,zone_su2}/
+    delivery_outbreak_<x>_array.bfbs`.
+    - pokedata `{values: [DeliveryOutbreakPokeData]}`: 0 id u64, 1 devid u16, 2 sex int, 3 formno byte, 4 / 5 min /
+      maxlevel short, 6 area (table AreaNo_DO: 23 bools _1.._23), 7 locationName u64 (hash), 8 enabletable (struct
+      5 bools land / up_water / underwater / air1 / air2), 9 versiontable (table A, B), 10 bringItem (struct itemID
+      int, bringRate byte), 11 enableRarePercentage bool, 12 rarePercentage float, 13 addRibbonType int (RibbonType),
+      14 addRibbonPercentage float, 15 enableScaleRange bool, 16 / 17 min / maxScale short.
+    - each zone file `{values: [{0 zoneid u64, 1 lotvalue short, 2 poke1 u64, 3 poke1lotvalue short, ... 10 poke5,
+      11 poke5lotvalue}]}`.
+  - The friend's blocks read cleanly with these: 30 pokedata and 10 zones per region, all placeholders
+    (locationName = the FNV basis, the hash of ""; versiontable A and B set). No real outbreak to copy.
+  - **Loader** 0290d3b8(M, data) (no direct callers; M = *DAT_046d4ed0): data is one struct [u32 at +0 (stored at
+    M+0x50; identifier?)][pokedata 0xe18][main 0x300][su1 0x300][su2 0x300]. It calls the setters 029293dc /
+    029294ec / 029295fc / 0292970c(M, part), which point the resources at `part` directly (no copy):
+    *(M+0x220)+0x30 (pokedata; the others likely +0x38 / 0x40 / 0x48), via 01189558 / 01eaa4e0 as for raids. Then
+    029299b4(M, 0), the refresh (also called from 8c6da4, 29288bc, 292939c); it reads the pokedata fields
+    (addRibbonType, enableRarePercentage at main_565.c's lifted lines).
+  - 0292bd38 (callers 292af5c / 292b024 / 292b0ec, one a region) copies a zone file into 10 slots of {zoneid,
+    lotvalue, poke1..5 + lot values}. **Open:** what zoneid indexes (outbreak_point_{main,su1,su2} entries? the
+    byte DeliveryZoneID suggests an index), whether pokeN is a pokedata `id`, and where the outbreak save struct
+    lives in memory (for a live export like raidgem.c's). Then the Outbreaks tab (PKHeX Encounters9.Outbreak).
+  - Lookups: strings are file offset - 0x1000 (main.elf's first segment at 0x1000 -> 0); lifted code loads them as
+    `X = 0x710<page>ull; X = X + 0x<off>ull`.
 - Other route (agreed, not started): past / custom events from PKHeX.Core's lists served as deliveries from bcat.c
   (`build/bcat/delivery/raid/*_3_0_0`) or written as blocks; find the delivery schema (.bfbs near the raid tables?).
   Version: 174 event raid entries in PKHeX, 23 Scarlet-only, 23 Violet-only (Scarlet-only bosses need a delivery

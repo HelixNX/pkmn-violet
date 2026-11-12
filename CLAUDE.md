@@ -33,8 +33,9 @@ disables a DLL for next start), Multiplayer (`nxrecomp/runtime/net/netmenu.c`). 
 F12 frame capture to `build\frames\`. The menu is `nxui.dll` (`nxrecomp/ui/nxui.cpp`).
 
 **Mods** (`build\cmake\mods\`, `NX_MODS=0` none; sources `violetrecomp\mods\<name>\`, shared `mods\common\`):
-F6 raids (seeds, dens), F7 items (+ Lua console), F8 mons (box writer, eggs, trainer ids, wild spec, spawns around
-you), F9 / F10 weather. Data: `python mods\raids\raiddata.py` (needs `build\ooz`), svedit `monsdata` (above).
+F4 events (deliver past event raids from PKHeX's lists or BCAT files, live), F6 raids (seeds, dens, event dens), F7
+items (+ Lua console), F8 mons (box writer, eggs, trainer ids, wild spec, spawns around you), F9 / F10 weather. Data:
+`python mods\raids\raiddata.py` (needs `build\ooz`), svedit `monsdata` (above) and `events ..\..\..\build\mods`.
 
 **Saves:** `build\save\`; backups and test saves in `build\saves\` (`save-net-a` / `-b`: the user set music volume,
 don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game edits: `violetrecomp\tools\svedit`
@@ -42,7 +43,8 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
 
 **Switches** (read once at boot): `NX_ROOM`, `NX_NICK`, `NX_MODS=0`, `NX_RES_SCALE`, `NX_FPS=0`, `NX_TIME`,
 `NX_VK_VALIDATION`, `NX_PROFILE`, `NX_GPU_PROF`, `NX_GPU_TIMELINE`, `NX_HITCH_MS`, `NX_WILD_LOG=1`, `NX_WATCH_MEM`,
-`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`; the rest: grep `NOTES.md`.
+`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`, `NX_LUA_GC=0`, `NX_PRESENT_HOLD=0`; the rest: grep `NOTES.md`. `build\clock.txt` (Unix seconds; the Events
+window writes it) starts the game's clock there at every start, until deleted.
 
 ## State (2026-11-11)
 
@@ -54,10 +56,11 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
   play").
   Joining from the menu after an offline start works.
 - Event raids: the friend's delivery (7-star Rillaboom, identifier 20230728) shows as an event crystal after a
-  restart. Not yet fought or caught.
+  restart. Not yet fought or caught. The events mod (F4, built 2026-11-11, **not run yet**) delivers past events
+  live through the game's own BCAT setters. F6 shows and seeds event dens.
 - Packaged builds read the game from the player's own NSPs and keys (`NX_PACKAGE`, `violetrecomp_pkg`).
 - Mods user-checked: F6, F7, F8 box writer and wild species swap. **Not tried in game yet:** F8 eggs, Trainers tab
-  and trainers seen, random gender, "Spawn on me" (crash fixed 2026-11-09), row spawn, held items, no-battles,
+  and trainers seen, random gender, the two wild rules kept over a restart (mod settings), "Spawn on me" (crash fixed 2026-11-09), row spawn, held items, no-battles,
   all-shiny, the rest of the wild spec; the weather mod (type numbers guessed); the menu beyond start-up.
 
 ## Open (the user's list, in order)
@@ -67,12 +70,31 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
    (room_server.exe as a child in a job object, join 127.0.0.1, show the LAN address); the room server on the ESP32.
 1. **F8 eggs:** make one, hatch it; trade one to the Switch (shiny for that trainer) and check the hatched mon with
    PKHeX (does SV mark a traded egg's egg location as Link Trade?). NOTES "Eggs and trainer ids".
-2. **Event raids:** catch the Rillaboom on the Switch with its clock in the event window; past events from PKHeX's
-   lists served as deliveries. NOTES "Event raids".
+2. **Event raids:** try the events mod (F4):
+   - deliver the 3-star Eevee spotlight and look for event crystals after the reroll;
+   - find a seed in F6, catch the raid, `svedit check` the mon;
+   - check the guesses in NOTES "Event raids" (event dens per reroll, group 1, fixed IVs).
+   Then outbreaks (the Outbreaks tab). Catch the Rillaboom on the Switch with its clock in the event window.
+   Next for the events mod (the user, 2026-11-11). Done 2026-11-11, built, **not tried in game yet**: the "Past
+   events" table sorts (any column) and its first column is "Deliver" with a tooltip; a "Ran" column from the
+   hand-made `mods/events/event_dates.csv` (Serebii; 214 of 230 raids dated; click a date for the "Game clock",
+   which writes `build\clock.txt` for the next start, NOTES "Event raids"); delivery.h shares equal sub-tables, so
+   all 230 raids fit one delivery ("Tick all shown"), and the game has no entry cap that we found. Left:
+   d. **Outbreaks:** schemas, save blocks and the loader / setters are mapped (NOTES "Event outbreaks"). Open: what
+      a zone's `zoneid` and `pokeN` index, where the outbreak save struct is in memory (for a live export like
+      raidgem.c's), then the Outbreaks tab from PKHeX's `Encounters9.Outbreak`.
+   e. **Real battle settings and rewards:** built raids take the Pokémon from PKHeX. Battle settings (bossDesc
+      shields / extra actions, time, Tera charge) and drop tables come from the game's first normal raid of that
+      star level (`raid_templates.txt`). For 7 stars that is the 6-star template with hpCoef 3500. So event-specific
+      boss behaviour and rewards (Ability Patch, extra Herba Mystica) are missing. Real data exists only for the
+      friend's Rillaboom (`build/bcat/friend/`). Fix: real BCAT delivery files in `build/events/<name>/` (the mod
+      already delivers those) from a community archive. That is a download: the user picks the archive, ask first.
 3. Spawn-pool rules (version exclusives in both, time of day, weights, density). NOTES "Wild spawns".
 4. Raid crystals after F6 writes: do they show again (`raidgem:` lines)? NOTES "Raid crystals".
 5. Missing letters (check text after a long session) and rain. NOTES "Open rendering issues".
-6. Performance. NOTES "Performance" (ranked lists from the reference sweeps).
+6. Performance: target a steady 120 fps at 2x (the user, 2026-11-12). NOTES "Performance": "Frame stalls at 60 / 120"
+   (Lua collector, present hold; what is still open), then the ranked lists. Built 2026-11-12, **not played yet**:
+   the game's own full Lua collections (a 50-70 ms hitch every 4-12 s) turned into a hurry of the paced collector.
 7. Older GPUs (RX 580 / GCN): 8-bit index and vertex input fallbacks and 64-wide waves built 2026-11-12, checked
    on the 7800 XT with `NX_NO_U8_INDICES` / `NX_NO_VI_DYNAMIC` / `NX_WARP64`; next an RX 580 tester's run
    (`nxrecomp/docs/GPUS.md` "State").
