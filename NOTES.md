@@ -357,13 +357,14 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
   is inside `vk_present` between the acquire and the submit (fence, acquire, submit all ~0): recording the
   present's commands, i.e. the downscale pass, the overlay or the menu / mods' ImGui draw. Not split yet: time
   `ui_draw` / `mods_draw` apart in `vk_present_times` and note whether a mod window was open.
-- **The autosave was a ~100 ms frame** (3 in a 3-minute session, `build/run-session-1112b.log`; the same signature
+- **A save was a ~100 ms frame** (manual or automatic, not told apart: the user saved by hand once or twice in
+  these sessions; identified by `main`'s write time matching one of them; 3 in a 3-minute session, `build/run-session-1112b.log`; the same signature
   in the session before): after two `prepo:u` 10105 calls main starts a thread that starts another (priority 44,
   cores 0-2), which took the free core 1 and kept it ~65 ms; job worker 5a (core 1 only, same priority) waited
   behind it while main waited for 5a on an idle core 0. The console's scheduler moves such a running thread to the
   idle core; ours did not. **Fix (nxrecomp kernel.c, `core_move`; `NX_CORE_MIGRATE=0` off):** a core's owner that
   may use an idle core moves there when a thread is ready behind it (checked when a core goes idle and when a
-  thread finds its cores taken). User session after it (`run-session-1112c.log`, 60 fps, 2x): the autosave frame
+  thread finds its cores taken). User session after it (`run-session-1112c.log`, 60 fps, 2x): its one save frame
   44.5 ms (main's own 40 ms of work), every window after loading at 60.0 with the worst frame 17-47 ms, one frame
   over 50 ms in the field (a 58 ms shader load); 3-7 moves a frame in ordinary play (`cpu:` line).
 - The presents' recording time is split in the slow-frame line (`recording`, `menu and mod windows`, `mods'
