@@ -389,6 +389,22 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
   pipeline or shader time). Lua's longest step 6-15 ms per 30 s. Next: per-pass GPU time at 2x in one of the
   97-110 fps places (NX_GPU_PROF=1 or an RGP capture), and a fractional render scale (2x renders 3840x2160 for a
   1440p window; "To do" GPU 5).
+- **Where the 2x frame's GPU time goes** (user sessions with NX_GPU_PROF, `run-session-1112e.log` by pass,
+  `-1112f.log` by shader; 7.9-8.4 ms a frame in a 100 fps place):
+  - 1.3-1.5 ms: one draw, the deferred lighting triangle (vs `5250e040fae92a2c` fs `fd87a85cf5d0fd96`, 3840x2160;
+    236 us at 1x). Its translation is 2,395 lines (`build/shaders_look/`): G-buffer texelFetches through `rs_c2`,
+    each with the integer / float texture choice made at run time, NaN-safe `nmin` / `nmax` / `sat`, bounds-checked
+    `cbr`.
+  - **1.0-1.15 ms: the skinning draws** (vs `44f2ec77be3a3fd3`, no fragment shader; 137-174 a frame, 6.6 us each
+    where other small draws are 0.4-0.8 us). Each has its own BeginTransformFeedback / End, and 38 passes a frame
+    end on `xfb_hazard` (gpu_draw.c `draw`). This cost does not scale with the render scale (a third of the 1x
+    frame's 3.1 ms). "Skipping skinning: no gain" in "Ruled out" was measured main-bound at 1x.
+    `xfb_hazard` treats a vertex buffer bound without a size as reaching to the end of memory and checks every
+    slot, used or not: likely false hazards. NX_GPU_PROF now logs how the captures are laid out (`gpu prof: xfb
+    draws`: same buffers / binding as the draw before, starting where it ended): not read in the field yet.
+  - 0.63-0.65 ms outside passes (155-162 copies, clears, barriers a frame).
+  - By pass at 3840x2160: lit buffer + depth 1.96 ms (10 passes), `c0:37` 1.66 (46 passes: the skinning chain and
+    others share the label), G-buffer 1.56 (3 passes).
 - Still open at 120, 2x: GPU busy 7-9 ms in some areas (GPU-bound there; 1,132 of 1,538 slow frames were GPU
   wait); translation spikes with no cause in the slow-frame line (~25 a session over 15 ms); presenting 15-25 ms
   (53 frames); single shader loads of 34-36 ms. NX_PROFILE's report is a ~200 ms hitch every 600 frames.
