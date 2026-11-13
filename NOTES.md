@@ -524,6 +524,18 @@ Kernel / I/O:
 - Ghidra headless: `nxrecomp/tools/ghidra/decomp.ps1 <abs out> <off>...` inside violetrecomp (`<off>!` makes a
   function Ghidra lacks, `x<off>` callers only; ~10 s). idalib on `main.elf.i64`: 15 s a batch; IDA batch `idat -A
   -S<script>` on a copy.
+- **Whole-game Hex-Rays decompile** (2026-11-12, IDA 9.3): `build/analysis/hexrays/main_0.c` .. `main_7.c` (326 MB,
+  163,935 functions, blocks of 256 dealt round robin, so grep all eight). Each function follows a line
+  `// ==== <ELF offset hex> <name>` (offset = main+off): `rg -n "^// ==== b5d8fc " build/analysis/hexrays`.
+  1,095 failed (`FAILED: <why>`): 964 are import stubs ("special segments"), 27 call analysis, 2 too big. Made by
+  `nxrecomp/tools/ida_decomp.ps1 dump\elf\main.elf build\analysis\hexrays -Seeds build\analysis\main_ida.json`:
+  analysis 17 min (162,375 functions + 1,557 from the lifter's export) writes `dump/elf/main.elf.i64` (815 MB), then
+  8 idat processes on copies, 17 min. idat needs `TVHEADLESS=1` to run without a console (the script sets it).
+  Not done: sdk, subsdk0 (same command on their ELFs). The script's decompile step ran as written; its analysis
+  step was started by hand that day (same idat arguments), so the script's own analysis branch is untested. The
+  earlier "idat batch failed to start" did not recur and its cause was never found. Shard speed 10-40 functions/s,
+  idat about 0.5-1 GB each. Hex-Rays names are IDA's defaults (`sub_<off>`): no symbols or types were imported.
+  The .i64 opens in the IDA GUI; batch scripts should work on a copy.
 
 ## Local play
 

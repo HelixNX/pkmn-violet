@@ -65,9 +65,9 @@ window writes it) starts the game's clock there at every start, until deleted.
 
 ## Open (the user's list, in order)
 
-**Next session starts with (the user, 2026-11-12):** the game's decompile in IDA (no `main.elf.i64` exists yet and
-an earlier idat batch failed to start: sort that out first). Then shaders: the lighting draw's translation (NOTES
-"Where the 2x frame's GPU time goes"). Also waiting: the crash of 2026-11-12 (the game's full Lua collections
+**Next session starts with (the user, 2026-11-12):** shaders: the lighting draw's translation (NOTES "Where the 2x
+frame's GPU time goes"). The game's decompile in IDA is done for main (`build/analysis/hexrays/`, Commands below;
+sdk and subsdk0 not done, not asked). Also waiting: the crash of 2026-11-12 (the game's full Lua collections
 answer failed allocations; which heap fills in a long session, NOTES "Frame stalls"), and the broken text capture
 `build/frames/frame_23259*`.
 
@@ -139,5 +139,8 @@ answer failed allocations; which heap fills in a long session, NOTES "Frame stal
   extract\upd\01008f6008c5e800…11.tik -x /0 dump\exefs extract\upd\d24a763a8882575f1c252dce37021db5.nca`; RomFS the
   same with `--basenca extract\base\ef6d3388d34a30dda23208f98780c610.nca -x /1 dump\romfs`.
 - `llvm-nm -D [-C] dump/elf/main.elf` lists imports / exports.
-- Decompile: `..\nxrecomp\tools\ghidra\decomp.ps1 <abs out path> <off>...` from `violetrecomp\` (GHIDRA_HOME or
+- Decompiled main (Hex-Rays, all functions): `rg -n "^// ==== <off hex> " build/analysis/hexrays` finds main+off
+  in `main_0.c` .. `main_7.c`; read from that line. Redo / other modules: `..\nxrecomp\tools\ida_decomp.ps1`
+  (NOTES "Whole-game Hex-Rays decompile"). `dump/elf/main.elf.i64` is the analysed IDA database.
+- Decompile one function afresh: `..\nxrecomp\tools\ghidra\decomp.ps1 <abs out path> <off>...` from `violetrecomp\` (GHIDRA_HOME or
   `-Ghidra <dir>`), IDA batch (`idat -A -S<script>` on a copy of the .i64), or REA (cleanup in `../CLAUDE.md`).
