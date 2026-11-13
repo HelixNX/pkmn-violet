@@ -43,7 +43,7 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
 
 **Switches** (read once at boot): `NX_ROOM`, `NX_NICK`, `NX_MODS=0`, `NX_RES_SCALE`, `NX_FPS=0`, `NX_TIME`,
 `NX_VK_VALIDATION`, `NX_PROFILE`, `NX_GPU_PROF`, `NX_GPU_TIMELINE`, `NX_HITCH_MS`, `NX_WILD_LOG=1`, `NX_WATCH_MEM`,
-`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`, `NX_LUA_GC=0` (3: a hurry instead of the game's full collections, crashes), `NX_PRESENT_HOLD=0`, `NX_CORE_MIGRATE=0`, `NX_SHADER_PRELOAD=0`, `NX_XFB_STORE=0`; the rest: grep `NOTES.md`. `build\clock.txt` (Unix seconds; the Events
+`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`, `NX_LUA_GC=0` (3: a hurry instead of the game's full collections, crashes), `NX_PRESENT_HOLD=0`, `NX_CORE_MIGRATE=0`, `NX_SHADER_PRELOAD=0`, `NX_XFB_STORE=0`, `NX_OCCLUSION=0`, `NX_BARRIER_SKIP=0`; the rest: grep `NOTES.md`. `build\clock.txt` (Unix seconds; the Events
 window writes it) starts the game's clock there at every start, until deleted.
 
 ## State (2026-11-11)
@@ -65,8 +65,10 @@ window writes it) starts the game's clock there at every start, until deleted.
 
 ## Open (the user's list, in order)
 
-**Next session starts with (the user, 2026-11-12):** shaders: the lighting draw's translation (NOTES "Where the 2x
-frame's GPU time goes"). The game's decompile in IDA is done for main (`build/analysis/hexrays/`, Commands below;
+**To check in play (2026-11-13; a first user session ran, results not all read):** the lighting draw's translation
+has fewer instructions but is no faster (1.435 ms at 2x; NOTES "The lighting draw's translation"); real occlusion counts (far
+house lights and the moon no longer flaring; trees near the camera; NOTES "Open rendering issues") and the game's
+barriers skipped inside passes (NOTES "The game's barriers inside a pass"). None is committed. The game's decompile in IDA is done for main (`build/analysis/hexrays/`, Commands below;
 sdk and subsdk0 not done, not asked). Also waiting: the crash of 2026-11-12 (the game's full Lua collections
 answer failed allocations; which heap fills in a long session, NOTES "Frame stalls"), and the broken text capture
 `build/frames/frame_23259*`.

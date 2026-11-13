@@ -215,6 +215,17 @@ Time Trials lesson). V4 graphics. V5 audio, movies, input, saves. V6 playable. A
 
 ### Open rendering issues
 
+- **Far house lights and the moon flaring over the screen, not always** (the user, 2026-11-13): the samples-passed
+  counter (NVN counter 1). The game resets it, draws, and has it reported (one pair a frame at the title; the
+  report there is 1,036,800 = 1920 x 540). Ours answered a made-up total that grew by 65,536 with every report of
+  any counter (83 million by the title), never reset. **Fix (nxrecomp `gpu_query.c`, `NX_OCCLUSION=0` the old
+  answers; built 2026-11-13, booted to the title with validation: only the two known messages; not played):**
+  real occlusion queries, one open in every pass once the game uses the counter, cut at each report and reset;
+  the sums are made on the CPU when the submission is done, before a guest thread can see that it is
+  (`gpu_completed`, `gpu_wait`), in the game's pixels (divided by the render scale squared). Log: `gpu: samples
+  passed: a submission with ...` (the first four). To check in play: the lights and the moon; trees and other
+  occlusion-tested objects near the camera (culling is real now, a frame late as on the console: popping?);
+  GPU time with a query open in every pass. `SetRenderEnableConditional` is still ignored.
 - **Rain:** splashes, distant sheets and wet surfaces show; no streaks near the camera. The half-res effects layer
   (`960x540 f41 @12f4f6a000`) has 7 lit pixels: streaks never drawn. Laptop, weather mod at Poco Path (logs
   `build/frames/rain-*`, `rain2-*`, `rain3-*`): forced rain / thunderstorm leave the sky blue and the ground dry; rain
@@ -435,6 +446,28 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
 - Still open at 120, 2x: GPU busy 7-9 ms in some areas (GPU-bound there; 1,132 of 1,538 slow frames were GPU
   wait); translation spikes with no cause in the slow-frame line (~25 a session over 15 ms); presenting 15-25 ms
   (53 frames); single shader loads of 34-36 ms. NX_PROFILE's report is a ~200 ms hitch every 600 frames.
+- **The lighting draw's translation, 2026-11-13** (fs `fd87a85cf5d0fd96`). **No gain in play:** the draw is still
+  1.435 ms at 2x (user session, `build/run-session-1113a.log`), so the instructions removed below were not its
+  cost (fetches / memory? open). It is the
+  sun, one local light, fog and the half-res buffers' upsample in one pass: no loop over lights. Compiled for the
+  7800 XT offline (`rga.exe -s vk-spv-offline -c gfx1101 --isa ...` from `.tools/rdts`, on the `.spv`; work files
+  `build/shaders_look/lit/`): 4,175 instructions, of which ~1,150 were 20 software integer divisions:
+  `rs_sub()`'s `ivec2(gl_FragCoord.xy) % r`, once per scaled texelFetch (the driver has no integer divide), run
+  only above 1x: the draw cost 5.5-6.4x at 4x the pixels. translate.py now works the sub-pixel offset out once
+  in main (`rs_init`, `rs_s`) from a float quotient: 3,024 instructions (-28%); 1,971 of 8,134 shaders use it.
+  Translations are in `build/shaders/spv/ef98d08b` (`27a75578` is the old set, can go). Tried on top, each ~5%
+  and not taken: no float controls, plain min / max for `nmin` / `nmax`, no integer / float texture choice.
+  Left in it: ~300 scalar mask instructions from the block flags (`b1`..`b63`).
+- **The game's barriers inside a pass wait for the next draw, 2026-11-13** (gpu.c OP_BARRIER, gpu_draw.c
+  `barrier_due`; `NX_BARRIER_SKIP=0` off; not measured in play yet). The pass ends only if that draw samples one
+  of the pass's targets, or a shader of the pass could store to memory or images (captures are checked on every
+  draw anyway, `xfb_hazard`). Aimed at the 64 pass ends a frame after skinning draws (`-1112j.log`). Title boot
+  with validation at 2x: the two known messages; there the pass ends are target changes (71 a frame) and one
+  barrier is kept. To check in play with NX_GPU_PROF: `passes/frame ended at`, the new line `the game's barriers
+  inside passes`, "outside passes" (was 0.67 ms), and that nothing flickers. "Deferring NVN barriers" in "Ruled
+  out" was before the capture fixes, when the captures ended those passes anyway.
+- `ref/PokeZ-ARecomp-Online` and `ref/totk-pc-recomp` are not on the desktop (only on the laptop?): the line
+  numbers under "To do, ranked" cannot be read here.
 - The lifter patches no branch instructions (`bl`): hook the instruction before (`after`) and change the arguments.
 
 ### Ruled out (measured, no gain)
