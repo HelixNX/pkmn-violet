@@ -179,9 +179,9 @@ void h_gc_fullgc(Ctx *c) {
  * The game also asks for full collections itself: main+25ff7d0's lua_gc(L, LUA_GCCOLLECT), reached through the
  * function pointer at [main+46d3928] from 14 places that let go of script objects (c50e14, c31b54, ff172c ...).
  * In the field that was one every 4-12 s, each 50-70 ms of main holding its core (a 57 MB heap marked in one go).
- * Here a request only hurries the paced collector: the steps grow to GC_HURRY_KB a frame until two cycles have
- * ended (the one under way may already have marked what was just let go; the next one frees it), about half a
- * second instead of a stall. NX_LUA_GC=2 keeps the paced steps and the game's full collections */
+ * They are the game's answer to a failed allocation (see h_gc_request) and stay full collections. NX_LUA_GC=3
+ * (crashes, kept for experiments) only hurries the paced collector instead: the steps grow to GC_HURRY_KB a frame
+ * until two cycles have ended */
 #define LUA_GC (MAIN + 0xc8c520)                /* lua_gc(L, what, ...) */
 #define GC_COLLECT 2
 #define GC_STEP 5
@@ -271,12 +271,15 @@ void h_gc_collect(Ctx *c) {
 /* before the game's own request for a full collection (main+25ff808 / 25ff838: mov w1, #LUA_GCCOLLECT, x0 = L):
  * LUA_GCCOUNT instead, and the paced collector hurries. A VM the per-frame routine doesn't step keeps the request */
 void h_gc_request(Ctx *c) {
-    if (gc_mode != 1) return;
     const u8 *g = (const u8 *)(uintptr_t)*(u64 *)(uintptr_t)(c->x[0] + 0x18);
     for (int k = 0; k < 4; k++)
         if (gc_stat[k].g == g) {
-            InterlockedExchange(&gc_hurry[k], 2);
             InterlockedIncrement(&gc_asked[k]);
+            /* The callers are allocation-failure paths: collect, try the allocation again, abort if it fails
+             * (main+eb071c..eb0780). So the collection must be done when this returns: turned into a hurry it
+             * crashed a long session (2026-11-12, nn::diag Abort from main+eb0784). NX_LUA_GC=3 hurries anyway */
+            if (gc_mode != 3) return;
+            InterlockedExchange(&gc_hurry[k], 2);
             c->x[1] = 3;
             return;
         }
