@@ -481,6 +481,47 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
   not there.
 - The lifter patches no branch instructions (`bl`): hook the instruction before (`after`) and change the arguments.
 
+### The frame run ahead of the fence wait, per-draw shortcuts, lighting shader (2026-11-13/14, GTX 1650 Ti laptop)
+
+Stand-still benchmark, off / on / on / off: **14.1 ms (70.7 fps) -> 11.2-11.8 ms (85-90 fps)**; GPU busy 9.55 ->
+9.2 ms, idle 4.6 -> 1.2-2.6, guest waits for the GPU 4.4 -> 0. Not played, not run on the RX 7800 XT.
+
+- **Submit ahead** (`NX_SUBMIT_AHEAD=0` off; "To do" GPU 1, without answering SyncWait late). The render thread
+  (`main+ccfe14`) records the frame, joins the job threads (`cd0e0c`), then waits for the last frame's two syncs
+  (`cd0e94`, `cd0eb0`) and only then submits (`cd0edc` -> `cd1a74`). Hook `submit_ahead` at `main+cd0e5c` (gfx.c,
+  patches.txt) hands the same list (`[x28 + [x28+d0] * 0x20 + 0x90]`, begin +8 / end +0x10; nothing if the byte at
+  x28+0x10 is 0) to `nvn_submit_ahead` (nvn.c), which translates and submits it at once; the game's own
+  nvnQueueSubmitCommands of the same handles then returns (compared; a different list is logged `run ahead` and
+  submitted normally). The GPU draws frame N-1 while N is translated. Nothing is read later than before, only
+  earlier, after recording ended.
+- Early flushes (`NX_FLUSH_FIRST`) only when the GPU has nothing queued (`NX_FLUSH_BUSY=1`: always): 11.2 -> 10.95.
+  Skipping the pass-boundary flushes (`NX_FLUSH_DRAWS`) while more than one submission is queued: tried, not
+  measured, removed.
+- **Per-draw shortcuts** (gpu.c `run` bumps `bind_gen[stage]` / `vi_gen` / `dyn_gen`, gpu_desc.c `desc_gen`,
+  gpu_pool.c `bad_gen`): `stage_ubos`, `set_vertex_input` (now also with mirrors), `set_dynamic_state` and
+  `descset_use` return when nothing they read was set since the last draw; `gpu_buffer_ro` keeps 256 answers.
+  Translation 7.2 -> 6.4 ms; the frame did not move (GPU-bound now: this pays on a faster GPU or below 1x scale).
+  Profile before (thread 5c, NX_PROFILE): NVIDIA driver 20.6%, waiting 17%, stage_ubos 7.6%, run 6.2%,
+  gpu_buffer_ro 4.1%.
+- **Lighting draw** (fs `fd87a85cf5d0fd96`, 2.19 of 9.7 ms at 1080p here). Where its time goes, by cutting the
+  shader off at a block (hand-edited GLSL swapped into `spv/<version>/`, `NX_PIPELINE_BINARY=0`, NX_GPU_PROF=2):
+  G-buffer fetches 0.14 ms, to b8 0.28, to b14 0.73, to b50 0.80, to b63 1.13, the last block (b63, 4 fetches of
+  `cb2.d[14][2]` and the final shading) ~1.06. Whole-shader edits: int / float choice dropped -0.33; plain
+  min / max / clamp, unchecked `cbr`, plain float->int -0.26; no float-controls modes +0.07 (keep them).
+  In the translator now (version `52b1ebd2`): `nmin` / `nmax` are GLSL.std.450 NMin / NMax (same NaN behaviour),
+  and the integer-texture choice of a fixed slot is the specialization constant `TEX_INT` (constant 2; its default
+  is the mask of slots tested that way, read by `shader_load` into `texint_slots`; `PipeKey.vs_texint` /
+  `fs_texint`, so pipelines.bins / .list start over). 2.19 -> 1.98 ms. Left: the unchecked / plain-clamp variant
+  (changes NaN results), and what b63 samples.
+- A uniform buffer bound past its pool's end (validation `VkDescriptorBufferInfo-range-00342`, once in three
+  validation runs, 1872 bytes at 18944 of a 20480-byte pool) is clamped and logged (`past its pool`).
+  `vkResetQueryPool-firstQuery-02741` in validation runs is NX_GPU_TIMELINE's pool (also with submit-ahead off).
+- Checks: frame 4501 of the benchmark against the old build: 81 of 2 M pixels differ by more than 8 (the view is
+  a wall and the minimap: a weak test). Validation: only the known messages. **Each machine needs a re-lift
+  (patches.txt) and `translate.py --spv`** (else every shader is translated at start: "COMPILING SHADERS" counts
+  per batch, so it sits at 1/x for minutes).
+- Quick benchmark: bench.ps1's run stopped after N windows, last 4 averaged (not in the repo; ~60 s a run).
+
 ### Ruled out (measured, no gain)
 
 Deferring NVN barriers; skipping skinning `vs 44f2ec77`; no barrier at pass ends (also corrupts lighting); CPU_NO_ACCESS

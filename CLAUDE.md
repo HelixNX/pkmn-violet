@@ -43,7 +43,7 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
 
 **Switches** (read once at boot): `NX_ROOM`, `NX_NICK`, `NX_MODS=0`, `NX_RES_SCALE`, `NX_FPS=0`, `NX_TIME`,
 `NX_VK_VALIDATION`, `NX_PROFILE`, `NX_GPU_PROF`, `NX_GPU_TIMELINE`, `NX_HITCH_MS`, `NX_WILD_LOG=1`, `NX_WATCH_MEM`,
-`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`, `NX_LUA_GC=0` (3: a hurry instead of the game's full collections, crashes), `NX_PRESENT_HOLD=0`, `NX_CORE_MIGRATE=0`, `NX_SHADER_PRELOAD=0`, `NX_XFB_STORE=0`, `NX_OCCLUSION=0`, `NX_BARRIER_SKIP=0`; the rest: grep `NOTES.md`. `build\clock.txt` (Unix seconds; the Events
+`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`, `NX_SUBMIT_AHEAD=0`, `NX_FLUSH_BUSY=1`, `NX_LUA_GC=0` (3: a hurry instead of the game's full collections, crashes), `NX_PRESENT_HOLD=0`, `NX_CORE_MIGRATE=0`, `NX_SHADER_PRELOAD=0`, `NX_XFB_STORE=0`, `NX_OCCLUSION=0`, `NX_BARRIER_SKIP=0`; the rest: grep `NOTES.md`. `build\clock.txt` (Unix seconds; the Events
 window writes it) starts the game's clock there at every start, until deleted.
 
 ## State (2026-11-11)
@@ -105,6 +105,9 @@ answer failed allocations; which heap fills in a long session, NOTES "Frame stal
    stall a frame (the kernel moves a thread to an idle core), shaders loaded ahead, skinning draws 1.0 -> 0.3 ms; at
    120 / 2x the GPU is the limit (6.7-9 ms busy). The game's own full Lua collections (50-70 ms every 4-12 s in
    long sessions) stay: they answer failed allocations.
+   Done 2026-11-14 (laptop, stand-still, **not played, not run on the 7800 XT**): the frame is submitted before
+   the render thread's fence wait (70.7 -> 85-90 fps), per-draw shortcuts, lighting shader 2.19 -> 1.98 ms (NOTES
+   "The frame run ahead of the fence wait"). Needs a re-lift and `translate.py --spv` per machine.
 7. Older GPUs (RX 580 / GCN): 8-bit index and vertex input fallbacks and 64-wide waves built 2026-11-12, checked
    on the 7800 XT with `NX_NO_U8_INDICES` / `NX_NO_VI_DYNAMIC` / `NX_WARP64`; next an RX 580 tester's run
    (`nxrecomp/docs/GPUS.md` "State").

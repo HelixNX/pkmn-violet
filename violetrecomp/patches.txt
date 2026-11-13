@@ -49,3 +49,6 @@ main+c8c508 was 52800041 after gc_collect           # mov w1, #2: before lua_gc(
 # lua_gc(L, LUA_GCCOLLECT) calls (lock already held / taken here).
 main+25ff808 was 52800041 after gc_request          # mov w1, #2: before the tail call
 main+25ff838 was 52800041 after gc_request          # mov w1, #2: before the call
+#
+# The frame's command buffers handed to the GPU before the render thread waits for the last frame (gfx.c).
+main+cd0e5c was f9400393 after submit_ahead         # ldr x19, [x28]: recording is over, the fence waits come next
