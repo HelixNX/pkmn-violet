@@ -198,12 +198,19 @@ __attribute__((constructor)) static void gc_init(void) {
 static double gc_heap(const u8 *g) { return (double)(*(s64 *)(g + 0x10) + *(s64 *)(g + 0x18)) / 1048576; }
 
 /* per collector (the game has more than one VM); the step being timed is the calling thread's */
-typedef struct GcStat { const u8 *g; double after, alloc, ms, longest, lo, hi, since; u32 n; } GcStat;
+typedef struct GcStat {
+    const u8 *g;
+    double after, alloc, ms, longest, lo, hi, since;
+    u32 n;
+    double smax[9];                             /* the longest step by the gcstate it began in */
+    u8 l0, l1;                                  /* the longest step's gcstate before and after */
+} GcStat;
 static GcStat gc_stat[4];
 static volatile LONG gc_hurry[4];               /* cycles still to finish at the hurried pace */
 static volatile LONG gc_asked[4];               /* the game's requests since the last line */
 static __declspec(thread) GcStat *gc_cur;
 static __declspec(thread) double gc_t0, gc_h0;
+static __declspec(thread) u8 gc_s0;
 
 /* before the game's lua_gc(L, LUA_GCSTEP, x2) (the lifter patches no branches: hooks sit on the instructions
  * around the calls and change their arguments) */
@@ -234,6 +241,7 @@ void h_gc_step(Ctx *c) {
     c->x[1] = GC_STEP;
     gc_cur = st;
     gc_h0 = gc_heap(g);
+    gc_s0 = g[0x65] < 9 ? g[0x65] : 8;
     gc_t0 = gc_ms();
 }
 
@@ -248,17 +256,23 @@ void h_gc_stepped(Ctx *c) {
     if (st->n && h0 > st->after) st->alloc += h0 - st->after;
     st->after = h1;
     st->ms += ms;
-    if (ms > st->longest) st->longest = ms;
+    if (ms > st->longest) { st->longest = ms; st->l0 = gc_s0; st->l1 = g[0x65]; }
+    if (ms > st->smax[gc_s0]) st->smax[gc_s0] = ms;
     if (!st->n || h1 < st->lo) st->lo = h1;
     if (h0 > st->hi) st->hi = h0;
     LONG k = (LONG)(st - gc_stat);
     if (gc_hurry[k] > 0 && g[0x65] == GCS_PAUSE) InterlockedDecrement(&gc_hurry[k]);
     if (++st->n == 3600) {
         double s = (gc_ms() - st->since) / 1000;
-        hlog(1, "lua: collector %p (%s): %.2f MB/s allocated, steps %.3f ms average, longest %.1f ms, heap %.1f-%.1f MB "
-                "over %.0f s, %ld full collections asked", (void *)g, g[0x66] == 1 ? "generational" : "incremental",
-             st->alloc / s, st->ms / st->n, st->longest, st->lo, st->hi, s, InterlockedExchange(&gc_asked[k], 0));
+        /* gcstate: 0 propagate, 1 enter atomic, 2 atomic, 3-6 sweeps, 7 finalizers, 8 pause */
+        hlog(1, "lua: collector %p (%s): %.2f MB/s allocated, steps %.3f ms average, longest %.1f ms (state %u -> %u), "
+                "heap %.1f-%.1f MB over %.0f s, %ld full collections asked; longest by state it began in: propagate %.1f, "
+                "atomic %.1f / %.1f, sweeps %.1f / %.1f / %.1f / %.1f, finalizers %.1f, pause %.1f ms", (void *)g,
+             g[0x66] == 1 ? "generational" : "incremental", st->alloc / s, st->ms / st->n, st->longest, st->l0, st->l1,
+             st->lo, st->hi, s, InterlockedExchange(&gc_asked[k], 0), st->smax[0], st->smax[1], st->smax[2], st->smax[3],
+             st->smax[4], st->smax[5], st->smax[6], st->smax[7], st->smax[8]);
         st->n = 0; st->alloc = st->ms = st->longest = st->hi = 0; st->since = gc_ms();
+        memset(st->smax, 0, sizeof st->smax);
     }
 }
 

@@ -226,6 +226,10 @@ Time Trials lesson). V4 graphics. V5 audio, movies, input, saves. V6 playable. A
   passed: a submission with ...` (the first four). To check in play: the lights and the moon; trees and other
   occlusion-tested objects near the camera (culling is real now, a frame late as on the console: popping?);
   GPU time with a query open in every pass. `SetRenderEnableConditional` is still ignored.
+- **The spinning white Poké Ball sign above Pokémon Centers ghosts at its edges** (the user, 2026-11-13, at 2x;
+  the user suspects the render scale). Not looked at: compare at 1x (Options > Video switches live), then F12.
+- The far house lights and the moon: "nothing looked off with lighting" (the user, 2026-11-13, after the
+  occlusion counts).
 - **Rain:** splashes, distant sheets and wet surfaces show; no streaks near the camera. The half-res effects layer
   (`960x540 f41 @12f4f6a000`) has 7 lit pixels: streaks never drawn. Laptop, weather mod at Poco Path (logs
   `build/frames/rain-*`, `rain2-*`, `rain3-*`): forced rain / thunderstorm leave the sky blue and the ground dry; rain
@@ -466,8 +470,15 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
   barrier is kept. To check in play with NX_GPU_PROF: `passes/frame ended at`, the new line `the game's barriers
   inside passes`, "outside passes" (was 0.67 ms), and that nothing flickers. "Deferring NVN barriers" in "Ruled
   out" was before the capture fixes, when the captures ended those passes anyway.
-- `ref/PokeZ-ARecomp-Online` and `ref/totk-pc-recomp` are not on the desktop (only on the laptop?): the line
-  numbers under "To do, ranked" cannot be read here.
+- **User session 2026-11-13** (`build/run-session-1113a.log`, 60 fps, 2x, NX_GPU_PROF=2; "game seemed fine", the
+  lights not asked about one by one): GPU work 7.66 ms a frame (median), the lighting draw 1.43, outside passes
+  0.667: nothing gained. Barriers inside passes are only ~6 a frame now (2-4 end the pass, 3-4 do not): the 64
+  pass ends at OP_BARRIER of `-1112j.log` became pass ends at the target change that follows each barrier
+  (gpu.c OP_RENDER_TARGETS: 10 -> 83 a frame), so the passes are split by the game's target changes, not its
+  barriers. One samples-passed report a frame. 1% low 19-20 ms, worst 24-28 ms per window: probably the Lua
+  collector's longest step (6.1-7.4 ms once a cycle; which gcstate: not logged yet).
+- `ref/PokeZ-ARecomp-Online` cloned on the desktop 2026-11-13 (TheMagnumChad's, shallow); `ref/totk-pc-recomp` is
+  not there.
 - The lifter patches no branch instructions (`bl`): hook the instruction before (`after`) and change the arguments.
 
 ### Ruled out (measured, no gain)
