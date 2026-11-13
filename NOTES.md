@@ -346,7 +346,7 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
   (`25ff818` tail call / `25ff83c`); it is reached through the function pointer at `[main+46d3928]` (`if (p->fn)
   p->fn(p + 0x20)`) from 14 places that let go of script objects (most often `c50e14`, `c31b54`, `ff172c`). Its
   neighbour `main+1107154` is `lua_gc(L, LUA_GCGEN, 0, 0)`. **Fix (lua.c `h_gc_request`, patches.txt; built
-  2026-11-12, booted to the title, not played yet):** the request becomes LUA_GCCOUNT and the paced collector
+  2026-11-12, booted to the title, not played yet; **withdrawn the same day: it crashes, see the crash entry below**):** the request becomes LUA_GCCOUNT and the paced collector
   hurries (200 KB a step, ~2 ms a frame) until two cycles have ended, so what was let go is freed within about
   half a second. `NX_LUA_GC=2` keeps the paced steps with the game's full collections. The `lua: collector` line
   now counts the requests. To check in play: no `luaC_fullgc` lines from `c8c5dc`, `longest` under ~3 ms, heap
@@ -415,6 +415,23 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
   (`-1112k.log`): only the two known messages (Location-06272, OpEntryPoint-08743). Not confirmed by the user
   yet: that characters and Pokemon animate as before. The translator changed: `build/shaders/spv/27a75578`.
   Left there: the game's own barriers between skinning draws (88 a frame end a pass at gpu.c OP_BARRIER).
+- **Crash 2026-11-12 17:32 (a long session, audren frame 188,000; log `build/crash-1112.log`): the hurry was
+  wrong.** `nn::diag` Abort on thread 5b from `main+eb0784`. The code there (`eb071c`-`eb0780`): call the
+  function pointer at `[main+46d3928]` (the full collection), try an allocation again (`bl eb0890`), abort (line
+  0x69) if it still fails. So the 14 callers of the collection are **allocation-failure paths**, and the
+  collection has to be finished when it returns. `h_gc_request` now only counts the requests and leaves them
+  full (rebuilt 2026-11-12, not run); `NX_LUA_GC=3` is the hurry, for experiments. An emergency collection
+  (`luaC_fullgc(emergency 1)`, heap 68.6 MB) came just before the abort.
+  So the 50-70 ms hitches every 4-12 s of the earlier long session are the game running out of room in some
+  heap and collecting to get by, and they will be back in long sessions. Next: which allocator fails and why it
+  is full after a long session (`eb0890`'s heap; `c97840` is the allocation before it; do we leak, or is the
+  heap sized for something we size differently?), or collect ahead of the failure in small steps when that heap
+  runs low. The first minutes of a session never ask (`0 full collections asked`).
+- **Broken text again** (the user, 2026-11-12 17:23): F12 capture `build/frames/frame_23259*` (the frame, and
+  targets `240x135 f63 @12f1c36000`, `1920x1080 f63 @12f6752000`, `30x16 f63 @12f1bd1800`). So "likely fixed
+  2026-11-10" in "Open rendering issues" is wrong. Not looked at yet.
+- The skinning change is user-checked: characters and Pokemon looked right. Old translations
+  deleted: only `build/shaders/spv/27a75578` is left (11 GB -> 1 GB).
 - Still open at 120, 2x: GPU busy 7-9 ms in some areas (GPU-bound there; 1,132 of 1,538 slow frames were GPU
   wait); translation spikes with no cause in the slow-frame line (~25 a session over 15 ms); presenting 15-25 ms
   (53 frames); single shader loads of 34-36 ms. NX_PROFILE's report is a ~200 ms hitch every 600 frames.

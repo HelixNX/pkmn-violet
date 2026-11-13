@@ -43,13 +43,13 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
 
 **Switches** (read once at boot): `NX_ROOM`, `NX_NICK`, `NX_MODS=0`, `NX_RES_SCALE`, `NX_FPS=0`, `NX_TIME`,
 `NX_VK_VALIDATION`, `NX_PROFILE`, `NX_GPU_PROF`, `NX_GPU_TIMELINE`, `NX_HITCH_MS`, `NX_WILD_LOG=1`, `NX_WATCH_MEM`,
-`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`, `NX_LUA_GC=0`, `NX_PRESENT_HOLD=0`, `NX_CORE_MIGRATE=0`, `NX_SHADER_PRELOAD=0`, `NX_XFB_STORE=0`; the rest: grep `NOTES.md`. `build\clock.txt` (Unix seconds; the Events
+`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`, `NX_LUA_GC=0` (3: a hurry instead of the game's full collections, crashes), `NX_PRESENT_HOLD=0`, `NX_CORE_MIGRATE=0`, `NX_SHADER_PRELOAD=0`, `NX_XFB_STORE=0`; the rest: grep `NOTES.md`. `build\clock.txt` (Unix seconds; the Events
 window writes it) starts the game's clock there at every start, until deleted.
 
 ## State (2026-11-11)
 
 - Playable with saves: story, battles, catching, raids, riding; ~170 fps uncapped on the RX 7800 XT, ~70-80 on the
-  GTX 1650 Ti laptop (GPU-bound). Known rendering issues: missing letters (likely fixed 2026-11-10, unconfirmed),
+  GTX 1650 Ti laptop (GPU-bound). Known rendering issues: missing letters (seen again 2026-11-12, capture `build/frames/frame_23259*`),
   no rain streaks near the camera.
 - Local play over rooms between instances (Union Circle, Tera raids) and with a **real Switch** through
   `../ldn-beacon` (raids, link trades: user-checked 2026-11-11; the dropped first joins are fixed, NOTES "Local
@@ -64,6 +64,12 @@ window writes it) starts the game's clock there at every start, until deleted.
   all-shiny, the rest of the wild spec; the weather mod (type numbers guessed); the menu beyond start-up.
 
 ## Open (the user's list, in order)
+
+**Next session starts with (the user, 2026-11-12):** the game's decompile in IDA (no `main.elf.i64` exists yet and
+an earlier idat batch failed to start: sort that out first). Then shaders: the lighting draw's translation (NOTES
+"Where the 2x frame's GPU time goes"). Also waiting: the crash of 2026-11-12 (the game's full Lua collections
+answer failed allocations; which heap fills in a long session, NOTES "Frame stalls"), and the broken text capture
+`build/frames/frame_23259*`.
 
 0. Try the menu: Options (rebind a key and a pad button), Mods (windows, Manage), Interface, Multiplayer (join,
    switch rooms, leave, rejoin; switch Union Circle sessions). Later (asked, not started): host a room from the menu
@@ -93,8 +99,10 @@ window writes it) starts the game's clock there at every start, until deleted.
 4. Raid crystals after F6 writes: do they show again (`raidgem:` lines)? NOTES "Raid crystals".
 5. Missing letters (check text after a long session) and rain. NOTES "Open rendering issues".
 6. Performance: target a steady 120 fps at 2x (the user, 2026-11-12). NOTES "Performance": "Frame stalls at 60 / 120"
-   (Lua collector, present hold; what is still open), then the ranked lists. Built 2026-11-12, **not played yet**:
-   the game's own full Lua collections (a 50-70 ms hitch every 4-12 s) turned into a hurry of the paced collector.
+   (Lua collector, present hold; what is still open), then the ranked lists. Done 2026-11-12 (user sessions): saves no longer
+   stall a frame (the kernel moves a thread to an idle core), shaders loaded ahead, skinning draws 1.0 -> 0.3 ms; at
+   120 / 2x the GPU is the limit (6.7-9 ms busy). The game's own full Lua collections (50-70 ms every 4-12 s in
+   long sessions) stay: they answer failed allocations.
 7. Older GPUs (RX 580 / GCN): 8-bit index and vertex input fallbacks and 64-wide waves built 2026-11-12, checked
    on the 7800 XT with `NX_NO_U8_INDICES` / `NX_NO_VI_DYNAMIC` / `NX_WARP64`; next an RX 580 tester's run
    (`nxrecomp/docs/GPUS.md` "State").
