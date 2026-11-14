@@ -232,6 +232,18 @@ Time Trials lesson). V4 graphics. V5 audio, movies, input, saves. V6 playable. A
     8-9, `NX_TOPO_CLASS=1` to test); counter reports into a destroyed pool are dropped (`occ_forget`);
   - shader waits use a condition variable; two overflow staging chunks are kept; ASTC decodes on up to 5 helper
     threads from 16,384 blocks up.
+  - Second pass the same day (built, validation run `bench_prevalid`: the same five known messages, **not played,
+    gain not measured**: a stand-still run streams nothing):
+    - a new image's layout change, zeroing and first upload go into the slot's pre command buffer (`pre_cmd`,
+      shared with the mirror copies): no pass ended and no barrier in the main one for a texture a draw binds for
+      the first time. The zeroing waits in `zero_list` and is dropped when guest memory is uploaded over the whole
+      image in the same submission (`images_zero` at the flush records the rest). Later uploads (CPU rewrites,
+      scaled images) are recorded in order as before;
+    - the image budget is asked of the driver (VK_EXT_memory_budget, every 30 frames): 90% of the heap's budget
+      less what we hold there that is no image (mirrors, staging); without the extension 55% of the heap less the
+      mirrors. Laptop: 2,590 MB (was 2,164), logged again when it moves by an eighth.
+    - Left: ASTC still decodes on the render thread under gpu_cs (only spread over helpers); one `Sleep(0)` spin
+      while another thread starts the translator thread (once per run).
 
   Left: texture pool entries repointed under draws already recorded (remade images; needs a run at 2x with
   validation first), new images and uploads still end the pass (the `pre` buffer idea), the image budget (55% of
