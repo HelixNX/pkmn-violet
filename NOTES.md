@@ -212,6 +212,33 @@ Time Trials lesson). V4 graphics. V5 audio, movies, input, saves. V6 playable. A
   effect skipped once); waits on a condition variable; cache kept between sessions (`build/pipelines.bin`, or
   `pipelines.bins` with VK_KHR_pipeline_binary); `pipelines.list` prebuilt at start; one-entry memo of the last ready
   pipeline.
+- **Code review of the GPU runtime (2026-11-14, laptop; built, one stand-still validation run `bench_gpufix`, not
+  played).** Fixed:
+  - alpha to coverage on one sample never tested alpha: the stand-in set the push constant, but shaders test the
+    pipeline's ALPHA_FUNC; now in the key (new pipelines: 19 draws skipped once in the first run while they built);
+  - F12 / NX_TRACE opened a second occlusion query inside the pass's (invalid): the pass's query is cut around
+    each draw instead (`occ_draw_begin`, `query_result`);
+  - an image destroyed or remade now drops only the set entries that held it (`images_gone`, `descset_drop_gone`),
+    not every entry of every set; entries without an image are looked up again when the pools change;
+  - ClearTexture clears its region (as an attachment; whole level only where the image cannot be one) and, like
+    CopyTextureToTexture into a part, uploads the destination's guest memory first;
+  - ReadTexels / WriteTexels go through the scaled copies (`copy_in` / `copy_out`);
+  - a pass's pipeline format is its view's (`view_format`);
+  - descriptor sets grow with a pool made again bigger, and one idle for 600 frames is reused past 8 / 12 / 6 sets;
+  - capture hazards ignore compute's buffers; indirect quads / line loops / polygons are skipped, not drawn as
+    triangle lists; a multisampled downsample that is no colour resolve is skipped and logged;
+  - core device features are asked for only where present (the log names missing ones); where
+    `dynamicPrimitiveTopologyUnrestricted` is false the topology class is in the pipeline key (PipeKey.compute bits
+    8-9, `NX_TOPO_CLASS=1` to test); counter reports into a destroyed pool are dropped (`occ_forget`);
+  - shader waits use a condition variable; two overflow staging chunks are kept; ASTC decodes on up to 5 helper
+    threads from 16,384 blocks up.
+
+  Left: texture pool entries repointed under draws already recorded (remade images; needs a run at 2x with
+  validation first), new images and uploads still end the pass (the `pre` buffer idea), the image budget (55% of
+  the heap), layer 0 only and no channel masks in ClearColor, D32F copied out where the game has D24S8. Not
+  exercised by the run: F12, render scale above 1, partial ClearTexture, a reused set. Validation messages are the
+  same five as before (`bench_val3`, `bench_rv`): four about SPIR-V on this GPU (no DenormFlushToZero), and
+  `vkResetQueryPool` on a pool in use (with NX_GPU_TIMELINE, which bench.ps1 sets).
 
 ### Open rendering issues
 
