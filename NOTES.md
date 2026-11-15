@@ -546,6 +546,10 @@ stand-still (the image work is for loads). Uncommitted at the end of the session
   that was sampled since the last barrier, and at a draw that samples an owed target or writes memory. Per frame:
   ~105-110 skipped, ~36 paid before other commands (mostly the ~20-27 compute dispatches), ~11 at a pass on an
   owed target, 0 at draws; 5 pass ends keep a full barrier (2 shader stores, 2 captures, 1 buffer update).
+  **Off by default since 2026-11-15** (`NX_LAZY_BARRIER=1` on): the user saw flicker, giant squares like broken
+  shadows and colours appearing at random, in play and in 1x bench runs; sync validation stand-still had shown no
+  hazard, so something it does not see (likely a sampled target reached another way: a view or alias of the shadow
+  map, a texture-pool read, buffer device address) skips the owed barrier. Open.
   **Result: 6.11 -> 6.00 ms a frame at 2x** (all runs of the day: off 6.00-6.20, on 5.94-6.03; the first pair
   said 6.15 -> 5.95, the last 6.06 -> 6.01), GPU busy -0.1 to -0.2; 1x 5.18 -> 5.06. Not played.
   - Checked with **sync validation** (`VK_LAYER_VALIDATE_SYNC=1` with NX_VK_VALIDATION=1; ~26 fps; its messages
@@ -592,7 +596,8 @@ stand-still (the image work is for loads). Uncommitted at the end of the session
   ~60% (~2.9), render thread 5c 53-59% (~2.6, of it 2.4 translating), GPU busy 3.3-3.5 with 1.4 idle (0.65-0.85 at
   a guest submission's start, 0.4-0.5 between its flushes). Perfectly overlapped, the slowest stage (main, ~3.5
   ms) would give ~285 fps: the other ~1.3 ms is hand-offs (main blocked at the job join `main+b47d18` and on the
-  mutex `main+ccc41c`, translation only after recording, the GPU waiting for translation). **Next session starts
+  mutex `main+ccc41c`, translation only after recording, the GPU waiting for translation). **Answered 2026-11-15
+  (next section): the hand-offs are cheap; the frame is main's own code.** **Next session starts
   here:** a per-frame timeline of when main, 5a, 5b, 5c and the GPU run and wait (the counters are averages), to
   find the critical path; then the fixes it points to: the guest's fence wait answered a frame late ("To do"
   GPU 1, hides the GPU idle at 1x), the job join (how many emulated cores the workers may use), translation off
@@ -611,6 +616,39 @@ stand-still (the image work is for loads). Uncommitted at the end of the session
 - Next, from what is measured: the ~2.5 ms of GPU work that does not scale (shadows, unscaled passes, the 1,050
   small draws); the controller above for a steady 120; a fractional render scale for 1440p windows ("To do" GPU
   5: 2x renders 2.25x the window's pixels).
+
+### The frame's timeline (NX_TRACE, 2026-11-15, RX 7800 XT + 7800X3D, 1x, stand-still)
+
+- **Tool:** `NX_TRACE=<first frame>[,<frames>]` (runtime/trace.c, default 20 frames) writes
+  `build	race-<frame>.json` (Chrome trace: ui.perfetto.dev) a few frames after the last: each guest thread's state
+  (running on its emulated core, with the host thread's share of CPU from QueryThreadCycleTime / TSC; waiting for a
+  core; blocked by kind, with 6 guest callers, the thread that ended the wait and the us from that to running), the
+  runtime's work on that thread (translate + submit, vkQueueSubmit calls, present, GPU and slot waits), GPU
+  submissions on the CPU clock (turns NX_GPU_TIMELINE's timestamps on), present markers.
+  `py -3.12 nxrecomp	ools	race_summary.py <json> [thread names]` prints it per frame and the block sites.
+  Bench: `bench.ps1 <name> NX_RES_SCALE=1 'NX_INPUT=300-9000/60:A' NX_TRACE=15000,30` (frame 15000 is well after the
+  load). Runs `trace1x-a/-b/-c`; ~10k events per 20 frames, nothing dropped, no visible cost outside the frames.
+- **Result (trace1x-c, frames 15000-15020, mean 5.04 ms):** main runs 3.51 ms a frame (3.39 of it on a host CPU:
+  ~97%, so Windows takes nothing from it) and is blocked 1.39: **the frame is main's loop**. Of main's blocks: the
+  job join `main+b47d18 < b47594 < 2b7aaf8` 0.69-0.89 ms (12-13 waits a frame, ended by 5a / 5b), the mutexes at
+  `main+ccc41c` (four callers `cce2e4` / `ccdfc4` from `2a78768` / `2a78798`) ~0.27 together (~13 waits), the
+  LightEvent at `main+98ce24 < 29b368c` 0.07. **A wake costs ~5 us** (wake -> running on the host), so ~13 hand-offs
+  are ~0.07 ms: the waits are real work on the other side (the workers' jobs), not our scheduler.
+  Workers 5a / 5b (cores 1 / 2): run 2.8-3.0, ~97% on CPU, blocked 1.8-2.0 waiting for jobs (`main+b47d18 <
+  130412c`). Render thread 5c (core 0 with main, mask 1): blocked ~2.2 at `main+b85d28 < 130412c` (the frame's
+  hand-over, ended by 5a / 5b), runs 0.4 of guest code, translates 2.3-2.4 without a core, waits for core 0 0.1-0.7
+  a frame (up to 2.4 in a slow stretch of trace1x-b, while main ran 5-6.6 ms frames). GPU busy 4.0, idle 1.0; no
+  guest waits for the GPU at all (submit-ahead), so answering the fence late cannot help at 1x.
+- **What it rules out:** the three fixes planned from the averages (fence wait a frame late, more cores for the
+  job join, translation off the critical path) do not touch the 1x critical path: main never waits on the GPU or the
+  translation, and the join waits are the workers' own run time. Frame-to-frame variance (4.2-6.1 ms) follows
+  main's run time (3.0-4.5), with ~97% on CPU throughout: the game's work varies, not the host.
+- **So at 1x the lever is lifted-code speed** (main's 3.4 ms and the workers' ~2.9): the "CPU / lifter" list below
+  (fewer SAVEC stores, preserve_none, PGO, leaf inlining). At 2x the GPU stays the limit (lazy pass ends are off
+  again, so ~6.1 ms).
+- **Lazy pass ends broke rendering in play** (2026-11-15, the user: flicker, giant squares like broken shadows,
+  colours appearing at random, also in the 1x bench runs); off by default now, `NX_LAZY_BARRIER=1` on. Not found
+  yet which read the owed barrier misses; sync validation stand-still saw no hazard.
 
 ### Ruled out (measured, no gain)
 
