@@ -484,7 +484,10 @@ outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer
 ### The frame run ahead of the fence wait, per-draw shortcuts, lighting shader (2026-11-13/14, GTX 1650 Ti laptop)
 
 Stand-still benchmark, off / on / on / off: **14.1 ms (70.7 fps) -> 11.2-11.8 ms (85-90 fps)**; GPU busy 9.55 ->
-9.2 ms, idle 4.6 -> 1.2-2.6, guest waits for the GPU 4.4 -> 0. Not played, not run on the RX 7800 XT.
+9.2 ms, idle 4.6 -> 1.2-2.6, guest waits for the GPU 4.4 -> 0.
+First played 2026-11-13 by the user (Ryzen 7 7800X3D, RX 7800 XT, 32 GB): the runtime side alone (before the
+hook was re-lifted in) gave 1% lows "closer to 60 than ever"; with the hook "looks pretty good". No numbers
+measured.
 
 - **Submit ahead** (`NX_SUBMIT_AHEAD=0` off; "To do" GPU 1, without answering SyncWait late). The render thread
   (`main+ccfe14`) records the frame, joins the job threads (`cd0e0c`), then waits for the last frame's two syncs
@@ -522,11 +525,99 @@ Stand-still benchmark, off / on / on / off: **14.1 ms (70.7 fps) -> 11.2-11.8 ms
   per batch, so it sits at 1/x for minutes).
 - Quick benchmark: bench.ps1's run stopped after N windows, last 4 averaged (not in the repo; ~60 s a run).
 
+### Barriers, pool mirrors, the game's resolution controller (2026-11-14, RX 7800 XT + 7800X3D, stand-still)
+
+Pulled `b7737cc` / `c6b1a85` (laptop) first: 2x 6.19 -> 6.17 ms, 1x ~5.0, nothing in validation: no change
+stand-still (the image work is for loads). Uncommitted at the end of the session (nxrecomp, built here only).
+
+- **Where 2x stands:** 6.0-6.2 ms (160-167 fps), GPU busy 5.7-6.0 of it: GPU-bound. 1x 4.8-5.2 ms, GPU 3.3,
+  CPU-bound. So ~2.5 ms of the GPU frame does not scale with the render scale (shadows, 1080p / 960x540 passes,
+  barriers, small draws) and ~0.85 ms per 1x of pixels. NX_GPU_PROF=2 at 2x (`bench_base2x-prof.log`): lighting
+  draw 0.98 ms, outside passes 0.53, `vs d4ea93c1 / fs d4f2e432` 1,050 draws a frame into an unscaled 1920x1080
+  `c0:97 ds:130` target 0.35, then a long tail. The lighting fs uses 96 VGPRs (rga stats): occupancy is not its
+  limit.
+- **Lazy pass ends** (gpu_draw.c `owed_*`, on by default, `NX_LAZY_BARRIER=0` off). Every pass end was a full
+  ALL_COMMANDS barrier (~105 a frame at 2x). Measured first, timing only: no pass-end barrier at all 6.34 -> 5.98
+  ms (ABBA); no barrier in the main command buffer at all 5.58 (another 0.42 ms: the rest is copies, clears,
+  dispatches, the passes below). Now a pass that wrote only its targets (no shader stores, captures, buffer
+  updates, linear targets) ends without one: the barrier is owed, its targets' ranges kept, and every sampled
+  image gets `read_epoch` = `bar_epoch`. Paid: before any command recorded outside a pass (`cmd()` while
+  `owed_live`), at flush, at the game's barriers outside a pass, at a pass on a target an owed pass drew into or
+  that was sampled since the last barrier, and at a draw that samples an owed target or writes memory. Per frame:
+  ~105-110 skipped, ~36 paid before other commands (mostly the ~20-27 compute dispatches), ~11 at a pass on an
+  owed target, 0 at draws; 5 pass ends keep a full barrier (2 shader stores, 2 captures, 1 buffer update).
+  **Result: 6.11 -> 6.00 ms a frame at 2x** (all runs of the day: off 6.00-6.20, on 5.94-6.03; the first pair
+  said 6.15 -> 5.95, the last 6.06 -> 6.01), GPU busy -0.1 to -0.2; 1x 5.18 -> 5.06. Not played.
+  - Checked with **sync validation** (`VK_LAYER_VALIDATE_SYNC=1` with NX_VK_VALIDATION=1; ~26 fps; its messages
+    say "hazard detected", and vk.c logs only 3 per message id): 0 hazards with it, some (copy / blit
+    READ_AFTER_WRITE) with no pass-end barriers. It does not see buffer-device-address accesses: the store scan
+    below is unchecked by it. (`VK_LAYER_ENABLES=...SYNCHRONIZATION...` is the deprecated spelling.)
+  - **Shader stores** (nvn.h `SHC_GSTORE`, gpu_shader.c): `SHC_GLOBAL` is the PhysicalStorageBufferAddresses
+    capability, so readers counted as writers. The SPIR-V scan now marks OpStore / atomics through a
+    PhysicalStorageBuffer pointer, or through a pointer it cannot place (types of variables, access chains,
+    conversions, loads, phis, selects). Pass side writes and the game's barriers inside passes (`barrier_due`)
+    use it. Global *reads* need no owed barrier: targets are their own VkImages, not guest memory.
+  - Tried, no gain: an attachment-to-attachment barrier instead of the full one at a pass on an owed target (6.02
+    vs 6.03: the cost there is the wait, not the flushes); no barriers around compute dispatches (5.99 vs 6.00,
+    timing only).
+  - NX_GPU_PROF also lists barriers a frame by the line that asked (`barriers/frame at`), the lazy counts and why
+    pass ends keep a full barrier.
+- **Pool mirrors on AMD at 2x** (`NX_POOL_MIRROR=1`): 6.19 -> 5.80-5.92 alone, but only ~1% on top of the lazy
+  pass ends (5.88 vs 5.95); at 1x they lose (5.17-5.27 vs 4.80-5.01). Left off on AMD. Two changes to them
+  (on wherever mirrors are, i.e. the laptop: **not run there**): pages the CPU writes in 16 scans in a row (none
+  more than 4 apart) become **hot** (`NX_MIRROR_HOT=<n>`, 0 never): read from host memory, write watch no longer
+  reset, so no fault or copy per frame; pages under a texture are pinned cold (`mirror_pin`: the scan must still
+  see texture rewrites). At 1x here: 5.45 -> 5.04 ms with mirrors on, copy-in 1.8 MB -> 0 a frame, ~880 hot
+  pages. And the GPU-written ranges are a bitmap per page (`Mirror.bad`) instead of a list scanned per lookup.
+- **The game's own dynamic resolution** (found, not used): `main+293dc08` (a twin at `main+1eb0dec`) runs when its
+  mode (`[x0+0x28]`, or `[x0+0x50]` if < 8) is 1-3. It averages the GPU frame time `[[main+475a0a0]+0x130]` (ns)
+  over `[x0+0x5c]` frames against 33.33 ms: at or over `[x0+0x60]` (0.95 in the twin) one level down, under 0.8
+  for `[x0+0x58]` checks one up. Levels (`main+3c5f120` width, `+3c5f138` height): 1/1, 1/0.8, 0.8/0.8,
+  0.8/0.65, 0.65/0.65, 0.5/0.5; it writes `3DBufferWidthScale` / `3DBufferHeightScale` into a parameter store,
+  and `main+d025cc` makes the 3D buffer at the screen size (`[[main+475a0a0]+0x100]`) times them (a real texture
+  of that size). `main+27b47f8` sets the scales by a mode (1: `[a1+12]`, 2: `[a1+16]`, else 1.0);
+  `main+293de7c` sets a level directly. The GPU time comes from two timestamp counters (types 10 and 0, reported
+  from `main+b606bc` / `b6083c`, read with nvnDeviceGetTimestampInNanoseconds at `main+cd1a0c` / `cd1a28`),
+  which we answer with CPU time (~2.4 ms apart), so it never steps down. It cannot render above 1x: only the 3D
+  buffer follows it (UI and post stay 1080p), so it is no replacement for our render scale. Possible use: real
+  GPU times and an 8.3 ms budget, so it lowers the scene only where 2x misses 120. Its in-between levels are not
+  16:9 and our scaler only scales 16:9 targets (`image_candidate`). Not tried; the hook needs a re-lift.
+- Async (the user asked): shaders and pipelines are built off the draw, presents have their own thread, and the
+  frame is submitted ahead of the fence wait. Answering the game's fence waits a frame late ("To do" GPU 1) is
+  not done; at 2x it cannot help (GPU idle ~0.2 ms a frame), at 1x it could (idle 1.4).
+- bench.ps1 at 1x: the title passes before the default A window ends: use `NX_INPUT=300-9000/60:A` (else "no
+  windows after the load").
+- **Why 1080p is ~210 fps and not 250-300 (the user's question, 2026-11-14): nothing is saturated.** At 1x
+  (`bench_base1x-b` / `nl1x-a` / `lz1x-a`, frame 4.6-4.9 ms): main runs 71-77% (~3.5 ms), job workers 5a / 5b
+  ~60% (~2.9), render thread 5c 53-59% (~2.6, of it 2.4 translating), GPU busy 3.3-3.5 with 1.4 idle (0.65-0.85 at
+  a guest submission's start, 0.4-0.5 between its flushes). Perfectly overlapped, the slowest stage (main, ~3.5
+  ms) would give ~285 fps: the other ~1.3 ms is hand-offs (main blocked at the job join `main+b47d18` and on the
+  mutex `main+ccc41c`, translation only after recording, the GPU waiting for translation). **Next session starts
+  here:** a per-frame timeline of when main, 5a, 5b, 5c and the GPU run and wait (the counters are averages), to
+  find the critical path; then the fixes it points to: the guest's fence wait answered a frame late ("To do"
+  GPU 1, hides the GPU idle at 1x), the job join (how many emulated cores the workers may use), translation off
+  the critical path ("To do" GPU 7). The 2x case is the GPU (above) and FSR 2 (below).
+- **AA / upscaling plan (the user, 2026-11-14: "TAA and FSR are the way to go"):** 2x is supersampling AA (Violet
+  has none); FSR 2 native AA or ~1440p -> 4K is the bigger GPU win (estimate ~4.5 ms vs 5.6-9 at 2x).
+  `ref/PokeZ-ARecomp-Online` (same Trinity engine family, not Unity) does FSR 2 / 3 / DLAA (`runtime/nvn/vulkan/
+  exec.c` ~3683 and ~9900, `fsr2.cpp`, `dlaa.c`): camera motion vectors from depth and this and last frame's
+  view-projection (picked from the draws' uniforms), a reactive mask from stencil, jitter only on passes drawn with
+  the scene depth, the resolve before the HUD. Steps here: a fractional render scale, Violet's camera matrices
+  (NX_TRACE_VCB), motion vectors and jitter, then FSR 2 itself (AMD FidelityFX, MIT: a download, ask first).
+- Long term (asked about 2026-11-14): a Unity rewrite is no shortcut (all ~52 MB of main and the Lua by hand, and
+  nothing derived could be shared). Mobile is closer through nxrecomp: the lifted C is ARM64-native, Android has
+  Vulkan, the OS layer (Win32 threads, write watch, files, SDL) would need a Linux / Android side (the Z-A port
+  runs on Linux and macOS).
+- Next, from what is measured: the ~2.5 ms of GPU work that does not scale (shadows, unscaled passes, the 1,050
+  small draws); the controller above for a steady 120; a fractional render scale for 1440p windows ("To do" GPU
+  5: 2x renders 2.25x the window's pixels).
+
 ### Ruled out (measured, no gain)
 
 Deferring NVN barriers; skipping skinning `vs 44f2ec77`; no barrier at pass ends (also corrupts lighting); CPU_NO_ACCESS
 pools in VRAM; staging in ReBAR VRAM; stable clocks (-13%); NX_FLUSH_DRAWS=60; colour compression / format lists (no
-DCC decompress in RGP); shader-quality changes above; kspin on the laptop.
+DCC decompress in RGP); shader-quality changes above; kspin on the laptop; attachment-only barriers between
+passes on one target and dropping the barriers around compute dispatches (both 2026-11-14).
 
 ### What a frame looks like (RGP, stand-still)
 
