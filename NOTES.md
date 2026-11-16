@@ -650,6 +650,66 @@ stand-still (the image work is for loads). Uncommitted at the end of the session
   colours appearing at random, also in the 1x bench runs); off by default now, `NX_LAZY_BARRIER=1` on. Not found
   yet which read the owed barrier misses; sync validation stand-still saw no hazard.
 
+### Lifted vs hand-written C++ for hot functions (2026-11-15)
+
+- **Hot list** (`bench_prof1x-a`, NX_PROFILE=main,5a,5b at 1x): flat. Top innermost functions, % of all samples
+  (lifted code is ~54%): `b43858` 1.3, `bf44f4` 1.1, `b479f4` 1.0, `2b815e8` 0.8, `41998` 0.8 (a Lua opcode handler:
+  tail jump through `qword_4383398[op & 0x7f]`), `2c4b0`, `c3d4e8`, `2ce69c0`, `b44204`, `2a55910`. Nothing to win
+  by rewriting one function.
+- **Setup** (`build/handport/`, game-derived, stays there): `lifted_<off>.c` = the function out of `build/lifted`
+  compiled alone with the lifted flags at -O1 (as built) and -O3; `hand_<off>.cpp` = typed C++ from the Hex-Rays
+  output (same calls and memory effects, host pointers) at -O3; `build.bat <off>` compiles and disassembles,
+  `count.py` counts instructions / loads / stores / calls.
+- **`b43858`** (a 60-slot frame scheduler: walks its task list, virtual and pointer-to-member calls, vector erase):
+  lifted 673 instructions (-O3: 688), 152 loads, 246 stores, 16 calls; hand 201, 36, 18, 10. **202 of the 246
+  stores and 38 loads are the Ctx** (SAVEC / LOADC around each call: ~17 stores, x19-x28 included), 36 more loads
+  are host-stack reloads (19 live guest registers). Its real memory writes: ~30 (~15 to the guest stack).
+- **`bf44f4`** (a Pokémon record's field read: owner lock by LDAXR / STXR, decrypt the 0x140 bytes with the LCG
+  1103515245 / 24691 XOR stream, checksum, field by the PID's block order `byte_3C62E18`, encrypt again): lifted 414
+  vs hand 259 instructions, but **the crypt and checksum loops are at parity** (12 instructions a step lifted, ~9
+  in the 2x-unrolled SIMD -O3 version: no faster). The difference is fixed per call: entry loads of every used
+  register from Ctx (ymm loads for x8-x15), SAVEC / LOADC around the 4 calls, and the exclusive monitor (stores of
+  address / size / value to Ctx + 0x330-0x340 around each LDAXR, then `lock cmpxchg`; native: one `lock cmpxchg`).
+- **So the lifter's cost is per call, not per instruction:** straight-line code and loops compile as native;
+  calls, entries and exclusives pay. -O3 does not help (the Ctx stores must happen: callees read Ctx). Matches the
+  sampled split (entry 3.8%, bl 9.0%, blr 5.2%, ret 2.3%, exclusives 4.7% of lifted samples). The fixes are the
+  "CPU / lifter" items 1 (SAVEC without x19-x28 where safe), 2 (preserve_none register arguments) and 4 (fused
+  LDAXR / op / STLXR); `handport` recounts a function after a lifter change without a game run.
+
+### x19-x28 left out of call-site stores (lifter, 2026-11-15)
+
+"CPU / lifter" item 1, built and run (smoke-tested, not A/B'd yet, not played).
+- **What changed** (a64lift.py `csr_flow` / `csr_needs`, a64rt.h `SAVE_FOR`, dispatch.c): before a BL / BLR the
+  lifted code stored every register it wrote to the Ctx (SAVEC); now it leaves x19-x28 out (SAVECN) unless the
+  callee reads them from its caller. Per entry, a must-written and a must-spilled dataflow over the function finds
+  the x19-x28 it reads before writing them on some path from that entry; reads after the register was spilled on
+  every path (prologue STP / STR to the stack) do not count; calls and tail jumps pass the callee's needs on (a
+  fixpoint over all modules). funcs.h gets `#define CSR_f_<addr> ~, 1,` for the entries that need them; `SAVE_FOR`
+  picks SAVEC / SAVECN at compile time. BLR: the flat function table carries the flag in bit 0; a flagged target
+  gets SAVEC and is logged once (`dispatch: BLR to ...`). Returns keep SAVEC (below). Result: 3,935 of 219,877
+  entries need them (Lua opcode handlers, luaV_execute's re-entries, IDA-split chunks, jump-table cases, start-up).
+- **What the analysis had to learn** (each found by a crash or a count): a register spilled on every path is never
+  the caller's (else correlated branches flag everything: main+b43b2c); per path, not per function (luaV_execute
+  main+41150 spills all, its re-entries main+411a0 / 411a4 read x21 / x24 / x25 straight from the Ctx); per entry
+  (else callers of luaV_execute's main entry inherit the re-entries' needs: 70,490 entries); needs pass through
+  functions that spill (the Lua VM keeps its state in x19-x28 across its own calls: main+26c60 -> 27da0 -> 41150);
+  libunwind's `unw_getcontext` (sdk+55fc30: stores all ten, uses none) is a capture, not a use (else every caller
+  of __cxa_throw: 25,000); setjmp passes nothing on; hook sites read only registers their function wrote.
+- **Returns must keep storing x19-x28.** A function has locals only for the registers it uses; for the others the
+  Ctx slot is the live value. A callee that used x23 and returned without writing it back left its own value
+  there, and a caller that never touches x23 then tail-jumped into a Lua handler reading it (the first build
+  crashed in luaV_execute on a CallInfo holding a handler address). With SAVEC at returns the callee also writes
+  back whatever stale values a SAVECN call left it, into slots its caller does not read.
+- **Debug lifts:** `NX_CSR_POISON=1` stores 0xdead..NN in the slots a call leaves out (a reader crashes at once on
+  0xdead...<reg>; the build ran a whole bench, 4 BLR notes: main+2059df4, f58da0, f59938, 732990, all handled);
+  `NX_CSR_KEEP=bl,blr` stores them fully at those sites (bisecting); `NX_CSR_DEBUG=1` prints each use and how far
+  each root's need spreads.
+- **Numbers so far:** handport `b43858` stores 246 -> 224 static (its 6 BLRs now carry a cold SAVEC copy and a
+  note call: 673 -> 713 instructions static, fewer executed); `bf44f4` 102 -> 84 stores. Two 1x benches 4.75 /
+  4.80 ms vs ~5.0 earlier in the day, but the day's runs are not comparable: the user had HEVC video playing for
+  some (DWM drops the game's frame rate even with decoding on the other GPU). An A/B (old lifter vs new, -O1 and
+  -O3 lifted code) with the video paused is next. Lifting now takes ~2 min on the desktop (2 processes).
+
 ### Ruled out (measured, no gain)
 
 Deferring NVN barriers; skipping skinning `vs 44f2ec77`; no barrier at pass ends (also corrupts lighting); CPU_NO_ACCESS

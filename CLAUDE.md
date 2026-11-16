@@ -116,6 +116,8 @@ answer failed allocations; which heap fills in a long session, NOTES "Frame stal
    2026-11-15: a frame timeline (`NX_TRACE`, NOTES "The frame's timeline"): at 1x the frame is main's own code (3.4
    ms on CPU) plus waits for the job workers' code; hand-offs cost ~5 us each. Next lever: lifted-code speed (NOTES
    "CPU / lifter").
+   2026-11-15: calls no longer store x19-x28 unless the callee reads them (lifter `csr_flow`; NOTES "x19-x28 left
+   out of call-site stores"): smoke-tested, **A/B and play pending**; then -O3 lifted code. Needs a re-lift.
 7. Older GPUs (RX 580 / GCN): 8-bit index and vertex input fallbacks and 64-wide waves built 2026-11-12, checked
    on the 7800 XT with `NX_NO_U8_INDICES` / `NX_NO_VI_DYNAMIC` / `NX_WARP64`; next an RX 580 tester's run
    (`nxrecomp/docs/GPUS.md` "State").
