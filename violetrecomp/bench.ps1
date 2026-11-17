@@ -34,7 +34,7 @@ if (-not $Summary) {
             Start-Sleep -Seconds 2
             if ($Rgp -and (Test-Path $rgpFile)) { Start-Sleep -Seconds 5; break }   # a cut-off trace fails (-2)
         }
-        if (-not $p.HasExited) { $p.Kill() }
+        if (-not $p.HasExited) { $p.Kill(); $p.WaitForExit(30000) | Out-Null }   # the exe stays locked until it exits
     } finally {
         foreach ($k in $set.Keys) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
         if ($cli -and -not $cli.HasExited) { Start-Sleep -Seconds 3; $cli.Kill() }

@@ -117,7 +117,12 @@ answer failed allocations; which heap fills in a long session, NOTES "Frame stal
    ms on CPU) plus waits for the job workers' code; hand-offs cost ~5 us each. Next lever: lifted-code speed (NOTES
    "CPU / lifter").
    2026-11-15: calls no longer store x19-x28 unless the callee reads them (lifter `csr_flow`; NOTES "x19-x28 left
-   out of call-site stores"): smoke-tested, **A/B and play pending**; then -O3 lifted code. Needs a re-lift.
+   out of call-site stores"): smoke-tested, **play pending**. Needs a re-lift. A/B 2026-11-16 at 1x (`build\ab\`
+   base / new / o3.exe): base 4.96, new 4.80, -O3 4.73 ms; new vs base within noise, -O3 ~1.5%. -O3 is the default
+   since 2026-11-16 (lifted code and runtime; the package reuses the same libraries).
+   2026-11-17: calls store x0-x17 only when written since the last call and reload only what is read after (lifter
+   `call_masks`, exact; NOTES "x0-x17 stored only when written"): 1x 4.73 -> 4.42 ms (226 fps), **not played**.
+   Needs a re-lift.
 7. Older GPUs (RX 580 / GCN): 8-bit index and vertex input fallbacks and 64-wide waves built 2026-11-12, checked
    on the 7800 XT with `NX_NO_U8_INDICES` / `NX_NO_VI_DYNAMIC` / `NX_WARP64`; next an RX 580 tester's run
    (`nxrecomp/docs/GPUS.md` "State").

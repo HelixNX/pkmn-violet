@@ -678,7 +678,7 @@ stand-still (the image work is for loads). Uncommitted at the end of the session
 
 ### x19-x28 left out of call-site stores (lifter, 2026-11-15)
 
-"CPU / lifter" item 1, built and run (smoke-tested, not A/B'd yet, not played).
+"CPU / lifter" item 1, built and run (smoke-tested, A/B'd 2026-11-16: ~0-3% at 1x, within noise; not played).
 - **What changed** (a64lift.py `csr_flow` / `csr_needs`, a64rt.h `SAVE_FOR`, dispatch.c): before a BL / BLR the
   lifted code stored every register it wrote to the Ctx (SAVEC); now it leaves x19-x28 out (SAVECN) unless the
   callee reads them from its caller. Per entry, a must-written and a must-spilled dataflow over the function finds
@@ -709,6 +709,45 @@ stand-still (the image work is for loads). Uncommitted at the end of the session
   4.80 ms vs ~5.0 earlier in the day, but the day's runs are not comparable: the user had HEVC video playing for
   some (DWM drops the game's frame rate even with decoding on the other GPU). An A/B (old lifter vs new, -O1 and
   -O3 lifted code) with the video paused is next. Lifting now takes ~2 min on the desktop (2 processes).
+- **A/B (2026-11-16, desktop, video stopped, 1x stand-still, `bench_csr_<exe><n>`, order new base o3 o3 base new):**
+  `build/ab/base.exe` (lifter before 3fd1c21, -O1) 5.058 / 4.856 ms, avg 4.957 (201.7 fps); `new.exe` (3fd1c21,
+  -O1) 4.755 / 4.844, avg 4.800 (208.3); `o3.exe` (3fd1c21, `NX_LIFT_OPT=-O3`) 4.775 / 4.680, avg 4.728 (211.5).
+  Window medians: base 5.07 / 4.83, new 4.73 / 4.79, o3 4.71 / 4.63. No validation lines. Read: new vs base's 3%
+  is mostly base1, an outlier whose GPU busy was also high (3.44 vs 3.16-3.31: the GPU's work doesn't depend on the
+  exe, so that run drifted); the second pair is level (4.844 vs 4.856). So x19-x28 alone is at most a few % at 1x.
+  -O3 is ~1.5% over -O1 and best in both its runs (exe 315 vs 324 MB; base 353; build 4.4 vs 4.0 min), against
+  the handport reading that -O3 doesn't help single functions. The other stores around a call are still all there:
+  x0-x18 written in the function and every written V register (128-bit each) go to the Ctx before each BL / BLR
+  (a64lift.py `savecn`); csr_flow could leave out x9-x18 and v8-v31 that the callee doesn't read the same way.
+  bench.ps1 now waits for the killed game to exit (the next exe copy found it locked).
+
+### x0-x17 stored only when written since the last call, reloaded only when read (lifter, 2026-11-16/17)
+
+- **What changed** (a64lift.py `call_masks`, `fn_cfg`; emit's `SAVEX(mask)` / `LOADX(mask)`, `SAVET`): per call
+  site the static count was ~10.3 Ctx stores and ~7.7 reloads (x0-x8 4.6 / 4.8, x9-x17 2.35 / 2.35, x29-x31 2.7
+  stores, V registers ~6%). Now, per function: a may-set forward of x0-x17 written since the last call (emptied at
+  every call), stored at calls (BL, BLR) and exits (RET, tail jumps, BR); and liveness backward, a call defining all
+  of x0-x17, every store reading its local, a full SAVE (svc, host code, hooks, traps) reading them all: only the
+  live ones are reloaded after a call. Exact, no calling-convention assumption: a slot not stored still holds the
+  value (the entry's, or the last callee's), a local not reloaded is never read or stored again. x18, x19-x28
+  (SAVE_FOR as before), x29-x30, SP, V registers, flags unchanged. `NX_CSR_KEEP=x` lifts the old full stores and
+  reloads; `NX_CSR_POISON=1` also puts 0xdeadbeef000000NN in the locals a call leaves stale.
+- **Two wrong turns:** (1) skipping x9-x17 at a BL when the callee does not read them (csr_flow widened to
+  x9-x17: 17,444 entries did) crashed at boot (`bench_tmp_x17*`, sdk / main+30cfc3c); (2) the poison lift showed
+  why: the written-since set is a may-set, so at a join where one path wrote x0 after a call and the other left
+  the local stale (not reloaded), the exit stored the stale one (Ctx x0 = 0xdeadbeef00000000 in
+  sdk+46c300). Fixed by counting stores as reads in the liveness; that also stores skipped x9-x17 at the next call
+  anyway (outlined functions may pass them through a call that does not touch them), so the skip was dropped.
+  The poison lift then ran boot to title 90 s clean (`smoke_poison.log`).
+- **Static:** handport `bf44f4` 416 -> 347 instructions, 106 -> 92 loads, 75 -> 58 stores (-O3); `b43858` 722 ->
+  688 (its stores are mostly host stack and x29 / x30 / SP). Exe 315 -> 282 MB.
+- **A/B** (2026-11-17, desktop, 1x stand-still, `bench_ex_*`, ex o3 o3 ex): `build/ab/o3.exe` 4.777 / 4.680 ms
+  (avg 4.729, 211.5 fps), `ex.exe` 4.448 / 4.390 (avg 4.419, **226.3 fps, -6.6%**); medians 4.76 / 4.65 vs 4.40 /
+  4.37; GPU busy 3.27 / 3.22 vs 3.01 / 3.07. Both ex runs are below every o3 run (also the 4.64 / 4.56 of
+  `bench_tmp_o3*`). Caveat: ex.exe also has the runtime at -O3 (o3.exe: -O2); its share not measured. Not played.
+- **Build memory** (the session's lift was stopped for low memory): the lift's workers took all but 4 GB of what
+  was free (8 workers on ~28 GB), and 15 compiles at -O3 paged (build 4.4 -> 10.3 min). Now the lift leaves 8 GB,
+  and lifted code above -O1 gets 3 GB per compile job (10 here; build 5.3 min).
 
 ### Ruled out (measured, no gain)
 
