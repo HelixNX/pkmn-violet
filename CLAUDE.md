@@ -123,6 +123,23 @@ answer failed allocations; which heap fills in a long session, NOTES "Frame stal
    2026-11-17: calls store x0-x17 only when written since the last call and reload only what is read after (lifter
    `call_masks`, exact; NOTES "x0-x17 stored only when written"): 1x 4.73 -> 4.42 ms (226 fps), **not played**.
    Needs a re-lift.
+   **Plan (the user, 2026-11-17), in this order**, each A/B'd at 1x like the others (`build\ab\`, ABBA; baseline
+   `build\ab\ex.exe` = the 2026-11-17 build; A/B script and order in NOTES). Then f (FSR 2); the lazy-barrier
+   line is skipped. **Next session continues a** (NOTES "preserve_none / sysv_abi on lifted functions": the static
+   check, what is built, what is left).
+   a. `preserve_none` on lifted functions (no Win64 callee-saved pushes / xmm6-15 spills; the attribute on lifted
+      functions and on GuestFn / the dispatch pointers; clang 19+). Notes estimate 3-10%. 2026-11-17: on paper a
+      loss (+1-5% instructions: x19-x28 spilled at call sites); `sysv_abi` (no xmm6-15 saves) about even. Both to
+      be A/B'd behind `NX_LIFT_CC`; half built, uncommitted.
+   b. x29 at calls like x19-x28 (callees only spill it: csr_flow); SP and x30 stay (callees read SP; unwinding and
+      backtraces read LR). x29 / x30 / SP are ~2.7 of the stores left per call site.
+   c. Fused exclusives: LDAXR / op / STLXR / CBNZ as one host atomic (71.8k sites, 4.7% of lifted samples;
+      `bf44f4`, the record read, does one per call). NOTES "CPU / lifter" 4.
+   d. One emulated core per physical core (SMT siblings apart; Savage Wind +4-10%). NOTES "Kernel / I/O" 3.
+   e. PGO (TotK +6-12%, `ref/totk-pc-recomp/docs/pgo.md`; a new profile per re-lift).
+   Skipped for now: fixing the lazy pass-end barriers (6.11 -> 6.00 ms at 2x, off for flicker in play).
+   f. FSR 2 at 2x (NOTES "AA / upscaling plan"; AMD FidelityFX, MIT: a download, ask the user first).
+   Also open: play the 2026-11-17 build; the runtime -O3 share of its gain (an `NX_CSR_KEEP=x` exe) unmeasured.
 7. Older GPUs (RX 580 / GCN): 8-bit index and vertex input fallbacks and 64-wide waves built 2026-11-12, checked
    on the 7800 XT with `NX_NO_U8_INDICES` / `NX_NO_VI_DYNAMIC` / `NX_WARP64`; next an RX 580 tester's run
    (`nxrecomp/docs/GPUS.md` "State").

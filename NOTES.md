@@ -749,6 +749,32 @@ stand-still (the image work is for loads). Uncommitted at the end of the session
   was free (8 workers on ~28 GB), and 15 compiles at -O3 paged (build 4.4 -> 10.3 min). Now the lift leaves 8 GB,
   and lifted code above -O1 gets 3 GB per compile job (10 here; build 5.3 min).
 
+### preserve_none / sysv_abi on lifted functions (plan a, 2026-11-17, in progress)
+
+- **Static check** (clang-cl 19.1.5, -O3, the build's lifted flags, copies in a scratch dir): the attribute alone
+  on every lifted function, GuestFn, call_ind / jump_ind / jump_ind_fast. main_175.c (holds `bf44f4`) 72,903 ->
+  76,453 instructions (+4.9%), pushes 784 -> 104, spills / reloads 990 / 9,851 -> 2,007 / 14,507; main_000.c
+  +0.6%; `bf44f4` 386 -> 401 (8 pushes -> 1, 0 -> 8 spills, 25 reloads). Why: x19-x28 locals live across calls
+  sit in host callee-saved registers (calls don't reload them, SAVE_FOR); with none, clang spills them around every
+  call site instead of pushing once per function. The notes' 3-10% assumed the register-argument design (x0-x8 in
+  registers, "Lifter and build"), not the attribute alone.
+- `sysv_abi` (rbx, rbp, r12-r15 kept; rsi / rdi and all xmm caller-saved: no xmm6-15 saves, 276 of them in
+  main_000.s): main_175 -0.1%, main_000 -0.6%, `bf44f4` 401. Neither wins on paper; the A/B decides (call
+  frequencies are not in a static count).
+- **Built so far (uncommitted):** a64rt.h `NXCC` (empty by default; `NX_LIFT_CC_PRESERVE_NONE` / `NX_LIFT_CC_SYSV`
+  pick one) on GuestFn, call_ind, jump_ind, jump_ind_fast; a64lift.py writes `NXCC` on f_ / b_ definitions, every
+  funcs.h declaration (so the h_ overrides too), the trap and weak-import stubs. Default output is unchanged until
+  a re-lift, and the same after one (NXCC empty).
+- **Left:** (1) nxrecomp.cmake `NX_LIFT_CC` (win64 | preserve_none | sysv) -> the define on every target that
+  includes a64rt.h (lifted, a64rt, runtime, game host code); (2) `NXCC` on every host function stored as a GuestFn
+  (the build errors name them: nvn.c procs ~379 incl. TEX_GET / MS_SET macros, dispatch.c call_ind / jump_ind /
+  trace_call / h_longjmp / h__longjmp, movie.c m_call and its h_ overrides, main.c h_rtld_*, loader.c
+  h_lookup_global_auto) and on the 10 shared overrides.txt definitions (nvn.c, movie.c, dispatch.c): those are
+  called directly from funcs.h's declaration, so a missing NXCC there is **not** an error but a crash: declare
+  them in hos.h with NXCC so a mismatch fails to compile. patches.txt hooks (`extern void h_x(Ctx *)` at the site)
+  stay Win64. MK8 shares the runtime (its own hooks, if any, the same rule). (3) re-lift, build three exes
+  (win64 = `build\ab\ex.exe`, preserve_none, sysv), smoke-test, A/B at 1x (ABBA, video paused).
+
 ### Ruled out (measured, no gain)
 
 Deferring NVN barriers; skipping skinning `vs 44f2ec77`; no barrier at pass ends (also corrupts lighting); CPU_NO_ACCESS
