@@ -14,7 +14,7 @@ From the workspace root (`..\start.ps1` wraps `violetrecomp\`'s scripts, which a
 |---|---|
 | Play (builds the exe and mods first; log `build\run.log`) | `.\start.ps1 violet` (`-NoBuild`, `-Log 2`; `-Timeout <s>` for unattended runs only) |
 | Build | `.\start.ps1 build violet` = `..\build.bat violet` = `violetrecomp\build.bat` (first configure ~25 min; keep Release) |
-| Re-lift (after a patches.txt or lifter change; per machine, the build doesn't warn) | from `violetrecomp\`: `py -3.12 ..\..\nxrecomp\tools\lifter\a64lift.py lift ..\build\lifted` (~6 min in one process on the laptop, less with workers; +1.5 min when the module analysis is redone) |
+| Re-lift (after a patches.txt or lifter change; per machine, the build doesn't warn) | from `violetrecomp\`: `py -3.12 ..\..\nxrecomp\tools\lifter\a64lift.py lift ..\build\lifted` (desktop ~25 s, laptop ~2 min; +1.5 min when the module analysis is redone) |
 | Room (UDP 24872) | `.\start.ps1 room` (`-Name`, `-Password`); `-Beacon` adds ldn-beacon in the same console |
 | Join a room | `.\start.ps1 violet -Room 127.0.0.1:24872 -Nick Host`, or in game: Multiplayer > Rooms |
 | Player package | `.\start.ps1 package violet <dir>` (`-PythonZip`, `-ShaderPack`; `-Mods all` copies the DLLs, not their game-derived data) |
@@ -42,118 +42,51 @@ don't overwrite). bench.ps1 copies `save` to `build\save-idle-run`. Closed-game 
 (.NET 11 + PKHeX.Core 26.10.18; back up `build\save` first).
 
 **Switches** (read once at boot): `NX_ROOM`, `NX_NICK`, `NX_MODS=0`, `NX_RES_SCALE`, `NX_FPS=0`, `NX_TIME`,
-`NX_VK_VALIDATION`, `NX_PROFILE`, `NX_GPU_PROF`, `NX_GPU_TIMELINE`, `NX_HITCH_MS`, `NX_WILD_LOG=1`, `NX_WATCH_MEM`,
-`NX_IPC_TRACE=<interfaces>`, `NX_KSPIN_US`, `NX_SUBMIT_AHEAD=0`, `NX_FLUSH_BUSY=1`, `NX_LUA_GC=0` (3: a hurry instead of the game's full collections, crashes), `NX_PRESENT_HOLD=0`, `NX_CORE_MIGRATE=0`, `NX_SHADER_PRELOAD=0`, `NX_XFB_STORE=0`, `NX_OCCLUSION=0`, `NX_BARRIER_SKIP=0`, `NX_LAZY_BARRIER=1` (off: broken in play), `NX_TRACE=<frame>[,<n>]`, `NX_MIRROR_HOT=<n>`; the rest: grep `NOTES.md`. `build\clock.txt` (Unix seconds; the Events
-window writes it) starts the game's clock there at every start, until deleted.
+`NX_TAA=0|1` / `NX_TAA_SHARPNESS` (else the menu's), `NX_SHADOWS2K=0`, `NX_VK_VALIDATION`, `NX_PROFILE`, `NX_GPU_PROF`,
+`NX_GPU_TIMELINE`, `NX_HITCH_MS`, `NX_TRACE=<frame>[,<n>]`, `NX_DUMP=<frames>`, `NX_WILD_LOG=1`, `NX_WATCH_MEM`,
+`NX_LAZY_BARRIER=1` (broken in play), `NX_HOST_CORES=1` (slower); off switches for kept fixes (`NX_SUBMIT_AHEAD=0`,
+`NX_LUA_GC=0`, `NX_PRESENT_HOLD=0`, `NX_CORE_MIGRATE=0`, ...): grep `NOTES.md`. Lift-time: `NX_EXCL_FUSE=0`,
+`NX_CSR_KEEP`, `NX_CSR_POISON`. Build: `NX_PGO=gen|use`. `build\clock.txt` (Unix seconds; the Events window writes
+it) starts the game's clock there at every start, until deleted.
 
-## State (2026-11-11)
+## State (2026-11-23)
 
-- Playable with saves: story, battles, catching, raids, riding; ~170 fps uncapped on the RX 7800 XT, ~70-80 on the
-  GTX 1650 Ti laptop (GPU-bound). Known rendering issues: missing letters (seen again 2026-11-12, capture `build/frames/frame_23259*`),
-  no rain streaks near the camera.
+- Playable with saves: story, battles, catching, raids, riding. RX 7800 XT + 7800X3D: CPU-bound at 1x (~230 fps at
+  the old bench spot), GPU-bound at 2x (~165 fps); GTX 1650 Ti laptop ~85-90 fps (GPU-bound). FSR 2 anti-aliasing
+  (menu) and 2K shadows (default) user-checked 2026-11-23. Known rendering issues: missing letters, no rain streaks
+  near the camera (NOTES "Open rendering issues").
 - Local play over rooms between instances (Union Circle, Tera raids) and with a **real Switch** through
-  `../ldn-beacon` (raids, link trades: user-checked 2026-11-11; the dropped first joins are fixed, NOTES "Local
-  play").
-  Joining from the menu after an offline start works.
-- Event raids: the friend's delivery (7-star Rillaboom, identifier 20230728) shows as an event crystal after a
-  restart. Not yet fought or caught. The events mod (F4, built 2026-11-11, **not run yet**) delivers past events
-  live through the game's own BCAT setters. F6 shows and seeds event dens.
+  `../ldn-beacon` (raids, link trades). Joining from the menu after an offline start works.
+- Event raids: a friend's delivery (7-star Rillaboom) shows as an event crystal. The events mod (F4) is built, **not
+  run yet**.
 - Packaged builds read the game from the player's own NSPs and keys (`NX_PACKAGE`, `violetrecomp_pkg`).
-- Mods user-checked: F6, F7, F8 box writer and wild species swap. **Not tried in game yet:** F8 eggs, Trainers tab
-  and trainers seen, random gender, the two wild rules kept over a restart (mod settings), "Spawn on me" (crash fixed 2026-11-09), row spawn, held items, no-battles,
-  all-shiny, the rest of the wild spec; the weather mod (type numbers guessed); the menu beyond start-up.
+- Mods user-checked: F6, F7, F8 box writer and wild species swap. **Not tried in game yet:** F8 eggs, Trainers tab,
+  random gender, mod settings over a restart, "Spawn on me", row spawn, held items, no-battles, all-shiny, the rest of
+  the wild spec; the weather mod.
 
 ## Open (the user's list, in order)
 
-**To check in play (2026-11-13; a first user session ran, results not all read):** the lighting draw's translation
-has fewer instructions but is no faster (1.435 ms at 2x; NOTES "The lighting draw's translation"); real occlusion counts (far
-house lights and the moon no longer flaring; trees near the camera; NOTES "Open rendering issues") and the game's
-barriers skipped inside passes (NOTES "The game's barriers inside a pass"). None is committed. The game's decompile in IDA is done for main (`build/analysis/hexrays/`, Commands below;
-sdk and subsdk0 not done, not asked). Also waiting: the crash of 2026-11-12 (the game's full Lua collections
-answer failed allocations; which heap fills in a long session, NOTES "Frame stalls"), and the broken text capture
-`build/frames/frame_23259*`.
-
 0. Try the menu: Options (rebind a key and a pad button), Mods (windows, Manage), Interface, Multiplayer (join,
-   switch rooms, leave, rejoin; switch Union Circle sessions). Later (asked, not started): host a room from the menu
-   (room_server.exe as a child in a job object, join 127.0.0.1, show the LAN address); the room server on the ESP32.
-1. **F8 eggs:** make one, hatch it; trade one to the Switch (shiny for that trainer) and check the hatched mon with
-   PKHeX (does SV mark a traded egg's egg location as Link Trade?). NOTES "Eggs and trainer ids".
-2. **Event raids:** try the events mod (F4):
-   - deliver the 3-star Eevee spotlight and look for event crystals after the reroll;
-   - find a seed in F6, catch the raid, `svedit check` the mon;
-   - check the guesses in NOTES "Event raids" (event dens per reroll, group 1, fixed IVs).
-   Then outbreaks (the Outbreaks tab). Catch the Rillaboom on the Switch with its clock in the event window.
-   Next for the events mod (the user, 2026-11-11). Done 2026-11-11, built, **not tried in game yet**: the "Past
-   events" table sorts (any column) and its first column is "Deliver" with a tooltip; a "Ran" column from the
-   hand-made `mods/events/event_dates.csv` (Serebii; 214 of 230 raids dated; click a date for the "Game clock",
-   which writes `build\clock.txt` for the next start, NOTES "Event raids"); delivery.h shares equal sub-tables, so
-   all 230 raids fit one delivery ("Tick all shown"), and the game has no entry cap that we found. Left:
-   d. **Outbreaks:** schemas, save blocks and the loader / setters are mapped (NOTES "Event outbreaks"). Open: what
-      a zone's `zoneid` and `pokeN` index, where the outbreak save struct is in memory (for a live export like
-      raidgem.c's), then the Outbreaks tab from PKHeX's `Encounters9.Outbreak`.
-   e. **Real battle settings and rewards:** built raids take the Pokémon from PKHeX. Battle settings (bossDesc
-      shields / extra actions, time, Tera charge) and drop tables come from the game's first normal raid of that
-      star level (`raid_templates.txt`). For 7 stars that is the 6-star template with hpCoef 3500. So event-specific
-      boss behaviour and rewards (Ability Patch, extra Herba Mystica) are missing. Real data exists only for the
-      friend's Rillaboom (`build/bcat/friend/`). Fix: real BCAT delivery files in `build/events/<name>/` (the mod
-      already delivers those) from a community archive. That is a download: the user picks the archive, ask first.
-3. Spawn-pool rules (version exclusives in both, time of day, weights, density). NOTES "Wild spawns".
-4. Raid crystals after F6 writes: do they show again (`raidgem:` lines)? NOTES "Raid crystals".
-5. Missing letters (check text after a long session) and rain. NOTES "Open rendering issues".
-6. Performance: target a steady 120 fps at 2x (the user, 2026-11-12). NOTES "Performance": "Frame stalls at 60 / 120"
-   (Lua collector, present hold; what is still open), then the ranked lists. Done 2026-11-12 (user sessions): saves no longer
-   stall a frame (the kernel moves a thread to an idle core), shaders loaded ahead, skinning draws 1.0 -> 0.3 ms; at
-   120 / 2x the GPU is the limit (6.7-9 ms busy). The game's own full Lua collections (50-70 ms every 4-12 s in
-   long sessions) stay: they answer failed allocations.
-   Done 2026-11-14 (laptop, stand-still; played 2026-11-13 on the 7800X3D / 7800 XT, no numbers, "looks pretty good"): the frame is submitted before
-   the render thread's fence wait (70.7 -> 85-90 fps), per-draw shortcuts, lighting shader 2.19 -> 1.98 ms (NOTES
-   "The frame run ahead of the fence wait"). Needs a re-lift and `translate.py --spv` per machine.
-   2026-11-14 (desktop, stand-still): lazy pass-end barriers 6.11 -> 6.00 ms at 2x (sync validation clean), but
-   **off by default since 2026-11-15**: in play, shadow-like squares and colour flashes (fix, then `NX_LAZY_BARRIER=1`);
-   shader stores told from reads, hot pages in pool mirrors (not run on the laptop); the
-   game's own dynamic resolution mapped (`main+293dc08`, fed CPU times now). NOTES "Barriers, pool mirrors, the
-   game's resolution controller".
-   2026-11-15: a frame timeline (`NX_TRACE`, NOTES "The frame's timeline"): at 1x the frame is main's own code (3.4
-   ms on CPU) plus waits for the job workers' code; hand-offs cost ~5 us each. Next lever: lifted-code speed (NOTES
-   "CPU / lifter").
-   2026-11-15: calls no longer store x19-x28 unless the callee reads them (lifter `csr_flow`; NOTES "x19-x28 left
-   out of call-site stores"): smoke-tested, **play pending**. Needs a re-lift. A/B 2026-11-16 at 1x (`build\ab\`
-   base / new / o3.exe): base 4.96, new 4.80, -O3 4.73 ms; new vs base within noise, -O3 ~1.5%. -O3 is the default
-   since 2026-11-16 (lifted code and runtime; the package reuses the same libraries).
-   2026-11-17: calls store x0-x17 only when written since the last call and reload only what is read after (lifter
-   `call_masks`, exact; NOTES "x0-x17 stored only when written"): 1x 4.73 -> 4.42 ms (226 fps), **not played**.
-   Needs a re-lift.
-   **Plan (the user, 2026-11-17), in this order**, each A/B'd at 1x like the others (`build\ab\`, ABBA; baseline
-   `build\ab\ex.exe` = the 2026-11-17 build; A/B script and order in NOTES). Then f (FSR 2); the lazy-barrier
-   line is skipped. 2026-11-20/21 (NOTES "preserve_none / sysv_abi" and "x29 left out ..., fused exclusive loops,
-   guest cores on host cores"): a done, **sysv** is Violet's default (game.json `lift_cc`; -3.2%); b done (-2.2%);
-   c built (-1.7% in one run) but **one crash in 5 b+c runs** (main+b5ab44), cause open (the user: later);
-   d ruled out (`NX_HOST_CORES=1`: +14%, off by default). b's hole fixed 2026-11-21 (hooks reading the caller's
-   x29: the PGO session crashed in lua.c h_gc_fullgc). e built (NX_PGO=gen / use, NOTES "PGO"): -3.8% in one clean
-   pair; the bench scene moved with the user's save. f: FSR 2 native AA built 2026-11-21, menu (Options > Video)
-   2026-11-22, played 2026-11-23 ("looks good"; NOTES "FSR 2"); next 1.33x upscaling (fractional render scale),
-   then the user's items 2 (XFB skinning into a device-local mirror) and 3 (uploads out of the render pass).
-   a. `preserve_none` on lifted functions (no Win64 callee-saved pushes / xmm6-15 spills; the attribute on lifted
-      functions and on GuestFn / the dispatch pointers; clang 19+). Notes estimate 3-10%. 2026-11-17: on paper a
-      loss (+1-5% instructions: x19-x28 spilled at call sites); `sysv_abi` (no xmm6-15 saves) about even. Both to
-      be A/B'd behind `NX_LIFT_CC`; half built, uncommitted.
-   b. x29 at calls like x19-x28 (callees only spill it: csr_flow); SP and x30 stay (callees read SP; unwinding and
-      backtraces read LR). x29 / x30 / SP are ~2.7 of the stores left per call site.
-   c. Fused exclusives: LDAXR / op / STLXR / CBNZ as one host atomic (71.8k sites, 4.7% of lifted samples;
-      `bf44f4`, the record read, does one per call). NOTES "CPU / lifter" 4.
-   d. One emulated core per physical core (SMT siblings apart; Savage Wind +4-10%). NOTES "Kernel / I/O" 3.
-   e. PGO (TotK +6-12%, `ref/totk-pc-recomp/docs/pgo.md`; a new profile per re-lift).
-   Skipped for now: fixing the lazy pass-end barriers (6.11 -> 6.00 ms at 2x, off for flicker in play).
-   f. FSR 2 (`deps/FidelityFX-FSR2` v2.2.1, MIT; nxrecomp `gpu_taa.c`, `fsr2.cpp`, `tools/fsr2`).
-   Also open: play the 2026-11-17 build; the runtime -O3 share of its gain (an `NX_CSR_KEEP=x` exe) unmeasured.
-7. Older GPUs (RX 580 / GCN): 8-bit index and vertex input fallbacks and 64-wide waves built 2026-11-12, checked
-   on the 7800 XT with `NX_NO_U8_INDICES` / `NX_NO_VI_DYNAMIC` / `NX_WARP64`; next an RX 580 tester's run
-   (`nxrecomp/docs/GPUS.md` "State").
-8. Long term (the user, 2026-11-11: "eventually an MMO"): online through our own server: the NPLN gRPC calls Violet
-   makes (sign-in, matchmaking for raids / Union Circle / trades, news / Mystery Gift) answered by us, TLS and
-   account hooked in our runtime / lifted code (DNS alone can't: NPLN is TLS against Nintendo's CA + NSO tokens).
-   More than 4 players in one world would mean changing the game. Until then "Connect to the Internet" shows a
-   notice (nifm.c, `"online_notice"`; preset 0 submitted, then IRequest 21 = the console's connection applet info).
+   switch rooms, leave, rejoin; switch Union Circle sessions). Later (asked, not started): host a room from the menu;
+   the room server on the ESP32.
+1. **F8 eggs:** make one, hatch it; trade one to the Switch (shiny for that trainer) and check it with PKHeX. NOTES
+   "F8".
+2. **Event raids:** try the events mod (F4): deliver the 3-star Eevee spotlight, look for event crystals after the
+   reroll, find a seed in F6, catch it, `svedit check` the mon; check the guesses in NOTES "Event raids". Then
+   outbreaks (open: zoneid / pokeN, the struct in memory); real battle settings and rewards need real BCAT files
+   (a download: the user picks the archive, ask first). Catch the Rillaboom on the Switch with its clock in the
+   event window.
+3. Spawn-pool rules (version exclusives in both, time of day, weights, density). NOTES "F8".
+4. Raid crystals after F6 writes: do they show again (`raidgem:` lines)?
+5. Missing letters (capture `build/frames/frame_23259*`) and rain. NOTES "Open rendering issues".
+6. **Performance** (target: a steady 120 fps at 2x). NOTES "Performance": "Where things stand", "Next, ranked". Next
+   (the user, 2026-11-21: "1-3 for now, revisit 4"): a fractional render scale and FSR 2 upscaling presets (the
+   user: 1.33x), XFB skinning into a device-local mirror, uploads out of the render pass; later the lazy pass-end
+   barriers and the fused-exclusive crash (main+b5ab44, the user: later). Frame generation dropped (2026-11-23).
+   Long sessions: the game's full Lua collections answer failed allocations (which heap fills: open).
+7. Older GPUs (RX 580 / GCN): fallbacks built 2026-11-12; next an RX 580 tester's run (`nxrecomp/docs/GPUS.md`).
+8. Long term (the user: "eventually an MMO"): online through our own server answering the NPLN gRPC calls (TLS and
+   account hooked in our runtime; DNS alone can't). Until then "Connect to the Internet" shows a notice (nifm.c).
 
 ## ROMs
 
@@ -184,6 +117,6 @@ answer failed allocations; which heap fills in a long session, NOTES "Frame stal
 - `llvm-nm -D [-C] dump/elf/main.elf` lists imports / exports.
 - Decompiled main (Hex-Rays, all functions): `rg -n "^// ==== <off hex> " build/analysis/hexrays` finds main+off
   in `main_0.c` .. `main_7.c`; read from that line. Redo / other modules: `..\nxrecomp\tools\ida_decomp.ps1`
-  (NOTES "Whole-game Hex-Rays decompile"). `dump/elf/main.elf.i64` is the analysed IDA database.
+  (NOTES "Debugging tools"). `dump/elf/main.elf.i64` is the analysed IDA database.
 - Decompile one function afresh: `..\nxrecomp\tools\ghidra\decomp.ps1 <abs out path> <off>...` from `violetrecomp\` (GHIDRA_HOME or
   `-Ghidra <dir>`), IDA batch (`idat -A -S<script>` on a copy of the .i64), or REA (cleanup in `../CLAUDE.md`).

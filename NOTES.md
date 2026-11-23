@@ -1,9 +1,10 @@
 # pkmn-violet: notes
 
-Findings, addresses, measurements and rule-outs, by topic (reorganised 2026-11-11; the dated wording is in git
-history). `CLAUDE.md` holds how to do things, state and what is open. Grep this before proposing a tool or an
-experiment. Addresses are main.elf offsets (main = 0x7100000000) unless noted; `main+x` in host stacks is truncated
-past 16 MB (`#line` is 24-bit in CodeView): main+416f28 means main+3416f28.
+Findings, addresses, measurements and rule-outs, by topic. `CLAUDE.md` holds how to do things, state and what is
+open. Grep this before proposing a tool or an experiment. Condensed 2026-11-23: session-by-session accounts (run
+names, every A/B pair, wrong turns) are in git history (`git log -p NOTES.md`, before that date). Addresses are
+main.elf offsets (main = 0x7100000000) unless noted; `main+x` in host stacks is truncated past 16 MB (`#line` is
+24-bit in CodeView): main+416f28 means main+3416f28.
 
 ## The game (4.0.0 ExeFS)
 
@@ -13,1073 +14,363 @@ past 16 MB (`#line` is 24-bit in CodeView): main+416f28 means main+3416f28.
 | sdk | 0x5d5660 (5.8 MB) | 0x6add7c | | NintendoSDK 13.3.13 (MK8: 4.4.0) |
 | subsdk0 | 0x33e7d0 (3.2 MB) | 0x210194 | | `movie::` (android NuPlayer/ACodec), as MK8 |
 
-- ~16 M instructions (3.4x MK8). **C++ exceptions used** (`__cxa_throw`, `_Unwind_Resume`, `__gxx_personality_v0`:
-  std, gRPC, Havok, engine). libc musl-style from the sdk (`__nnmusl_init_dso`).
+- ~16 M instructions (3.4x MK8). **C++ exceptions used** (std, gRPC, Havok, engine). libc musl-style from the sdk.
 - Graphics: NintendoSDK_gfx 13.3.13 (`nn::gfx`) + NintendoWare G3d / Vfx / Ui2d / Font over NVN; `glslc*` weak, never
-  called. Middleware in main: Havok AI 2021.1, Oodle, Wwise (`romfs/audio/wwise`), Bink 2 (`romfs/demo/movie/*.bk2`),
-  Lua, FlatBuffers, nlib LZ4, Pia 6.20.1 + NPLN 1.8.3 + gRPC + OpenSSL + libcurl.
+  called. Middleware in main: Havok AI 2021.1, Oodle, Wwise, Bink 2 (`romfs/demo/movie/*.bk2`), Lua, FlatBuffers,
+  nlib LZ4, Pia 6.20.1 + NPLN 1.8.3 + gRPC + OpenSSL + libcurl.
 - Services in main.npdm (36): acc:u0 aoc:u appletOE audin:u audout:u audren:u banana bcat:u bsd:u bsdcfg btm:u
   caps:su caps:u csrng ectx:aw friend:u fsp-srv htc:tenv htcs hwopus ldn:u ldr:ro mii:u mm:u nfc:mf:u nfc:user
   nfp:user ngct:u nifm:u nim:eca notif:a nsd:u nvdrv pctl pl:u prepo:u sfdnsres time:u vi:u.
 - Keys: every NCA decrypts with `../keys` (key gens 14, 15, 17). `title.keys` has no Violet entries: update and DLC
-  carry tickets (`--tik`); base has none. DLC owned via `game.json` "dlc": [1]; its PublicData RomFS is one
-  `keyfile.dat` (`dump/aoc/01008f6008c5f001`).
-- **RomFS** (30 files, 9.24 GB): almost all `arc/data.trpfs` (8.0 GB). `data.trpfs`: `ONEPACK\0`, u64 offset of a
-  FlatBuffers table {pack hashes, pack offsets} (23,589 packs). Pack hash = FNV-1a 64 with basis
-  `0xcbf29ce484222645` (not ...2325) of the name as `data.trpfd` stores it (slashes dropped). Pack = {file hashes,
-  files[]}; file {field 1 = 3 / field 2 = 4 when Oodle, u64 size, data}. Oodle Kraken (`8C 06`) via ooz (`deps/ooz`,
-  GPLv3+) in `oozbatch.exe` (separate process). 408,641 files, 34 GB. `nxrecomp/tools/trinity.py` reads any file by
-  path (needs numpy; run inside `violetrecomp\`); `pokedata_lc` fails its Oodle decode.
+  carry tickets (`--tik`). DLC owned via `game.json` "dlc": [1]; its PublicData RomFS is one `keyfile.dat`.
+- **RomFS** (30 files, 9.24 GB): almost all `arc/data.trpfs` (8.0 GB): `ONEPACK\0`, u64 offset of a FlatBuffers table
+  {pack hashes, pack offsets} (23,589 packs). Pack hash = FNV-1a 64 with basis `0xcbf29ce484222645` (not ...2325) of
+  the name as `data.trpfd` stores it (slashes dropped). Pack = {file hashes, files[]}; file {field 1 = 3 / field 2 =
+  4 when Oodle, u64 size, data}. Oodle Kraken via ooz (`deps/ooz`, GPLv3+) in `oozbatch.exe`. 408,641 files, 34 GB.
+  `nxrecomp/tools/trinity.py` reads any file by path (needs numpy; inside `violetrecomp\`).
 - Game logic is **Haxe compiled to Lua 5.4** (`haxe_lua/invoker.h`, CallImpl); scripts in romfs
-  `script/lua/bin/release/{main,main_dynamic,dll_*}/*.blua` with debug info and obfuscated names (classes `C<hash>`
-  globals, statics `S<hash>`, methods `F<hash>`, natives `c<hash>` / `f<hash>`); extracted to `build/lua/`.
+  `script/lua/bin/release/{main,main_dynamic,dll_*}/*.blua` with debug info and obfuscated names (classes `C<hash>`,
+  statics `S<hash>`, methods `F<hash>`, natives `c<hash>` / `f<hash>`); extracted to `build/lua/`.
 - Data files are FlatBuffers with `.bfbs` schemas next to them (`violetrecomp/tools/bfbs.py`). Names:
   `message/dat/English/common/*.dat`. Personal table `avalon/data/personal_array.bin` field 0 = {DevID, form,
   national, ?}. Species are stored by DevID (internal index; Espathra national 956 -> 927).
 - ldn:u's local communication id is the NACP's first LocalCommunicationId = Scarlet's 0100A3D008C5C000 (both games
-  meet on it; a real Switch and Eden filter on it). Dev builds read `dump/control/control.nacp`.
+  meet on it). Dev builds read `dump/control/control.nacp`.
+- **Memory setup** (`main+146e5f0`, the Switch's settings over the game's PC-like defaults): shadow size (settings
+  +48) 2048 -> 1024, +52 4 -> 2 (cascades?); Trinity heaps (`[x19]`: Gfx2 768 -> 900 MB, Vfx2 96 -> 68, Physics
+  64 -> 140, Ui2d 64 -> 32, Fs 1 GB -> 800 MB, Lua 96 -> 104, Sound 64, EventSystem 64 -> 8, Object 256; created
+  by name in the caller of `sub_146EA10`, hexrays main_7.c); NVN memory pools (`[x19+0x40]`), slot 4 320 -> 268 MB.
 
-## Plan (V0-V8)
-
-V0 shared framework `../nxrecomp` + thin per-game parts. V1 lifter at scale. V2 boot to `nnMain`. V3 headless main
-loop (offline services fail cleanly; implement sub-interface openers for real, never the null-object stub: MK8's
-Time Trials lesson). V4 graphics. V5 audio, movies, input, saves. V6 playable. All done.
-- **V7 performance and PC features.** Measure first. Quality options (user, 2026-10-19): render scale, anisotropy,
-  shadow map size (1024 cascades) are ours; LOD, draw distance, grass density are the game's data (look where
-  `nn::oe::GetOperationMode` feeds render settings). Our own menu first; the game's own Options menu maybe later.
-- **V8 packaging for owners**: done as `package.ps1` (Packaging). Still open: a one-folder build kit (extract,
-  nso2elf, Ghidra analysis, lift, build, translate, package; our own NSP extractor instead of nstool?).
-  **Never ship anything built from the game**, not even to owners.
+Plan V0-V8 (framework, lifter, boot, main loop, graphics, audio / movies / input / saves, playable) done; V7
+performance and PC features ongoing (quality options are ours: render scale, AA, shadow size; LOD / draw distance /
+grass are the game's data); V8 packaging done as `package.ps1` (open: a one-folder build kit). **Never ship anything
+built from the game**, not even to owners.
 
 ## Lifter and build
 
-- Bases: main 0x7100000000, subsdk0 0x7104800000, sdk 0x7105000000 (sizes 0x47d3000, 0x69a000, 0xda8000, 2 MB-aligned).
-- Function export: IDA (main 37 min, 165,000 functions; sdk 100 s, subsdk0 48 s) or Ghidra 12.1.3
-  (`tools/ghidra/ghidra_export.ps1 -Seeds`, `GHIDRA_HOME` / `-Ghidra`; main 19 min + 5 min seeding, 156,946
-  functions, 4,289 switch tables; same `<module>_ida.json`). Keep Ghidra's "Non-Returning Functions - Discovered"
-  off (it cut 9,706 sdk functions short). a64lift repeats function / jump-table recovery to a fixed point.
-- All 15.86 M instructions lift (6 header words in main stay traps). Added for Violet: SQDMULH/SQRDMULH, SQXTUN,
-  SRSHR/SRSRA, SHSUB, S/UABDL, S/UABAL, SQSHL/SQRSHL, SQABS, scalar saturating ops / narrows; fixed LD3/LD4/ST3/ST4
-  single-lane decoding and USRA precedence. Jump tables IDA missed recovered by pattern (`Mod.recover_switches`,
-  bounded by AND/UBFX/CMP: 34 sdk, 1 subsdk0, 14 main); BL-target function recovery; fall-through into IDA-split
-  functions; weak imports nobody defines get trap stubs (gRPC TLS, `getentropy`); analysis cached in
-  `build/modcache` (keyed on a hash of the analysis code since 2026-11-23, before on a64lift.py's mtime). `_writes` is exact (base only with writeback, Rt2 only for pairs):
-  a Bink thread once jumped into an unrecovered `adr; ldrb; add lsl #2; br` table because `ldr w19, [x7], #4` counted
-  as writing Rt2.
-- Lua's luaD_throw needs setjmp / longjmp: host jump buffer table 256 per thread, returned-frame slots reused first,
-  non-stack entries evicted first.
-- Lift: 919 files, 1.26 GB of C; worker processes (NX_LIFT_PROCS, ~0.6 GB each since 2026-11-23, ~3 GB before); a
-  re-lift took ~12 min on the laptop, 340 s in one process after the 2026-11-23 speed-ups. Build: LIFT_JOBS=0 = min(cores, RAM / 2 GB); full build ~4.4 min on the 16-thread
-  desktop, ~20 min on the laptop, 25 min before the parallel compile; exe 407 MB, PDB 304 MB. Tests: `a64test` with `py -3.12` (capstone + unicorn; 43,812 + 35,632 pair cases).
-- **Lifter speed-ups (2026-11-23, laptop; output byte-identical on subsdk0 + sdk, 1 and 4 processes):** profiled,
-  subsdk0 + sdk took 557 s, 408 of them the module analysis (`jump_table` scanned 0x800 + 0x4000 bytes before every
-  unresolved BR: 151 M word reads), and the cache was keyed on a64lift.py's mtime, so every lifter change redid it.
-  Now: (1) the cache key is a hash of the analysis code (`analysis_version`); (2) `_maybe_table` skips a BR whose
-  last definition before it (in jump_table's address-order model) is not `ADD Xd, Xn, Xm{, LSL / UXTW / SXTW}`;
-  (3) word reads from a uint32 view of the text; (4) the cache drops the per-instruction `owner` map (rebuilt on use
-  for a64dis.py), keeps function offsets as `array('I')`, stores the secondary entries: main's cache 207 -> 59 MB,
-  load 0.7 s, a worker ~0.35 GB instead of ~2.6; (5) all modules' chunks go to the pool at once; (6)
-  lift_function finds a function's switches by bisect, not by scanning all. Profiled 557 -> 141 s; analysis of all
-  three modules 86 s (once per analysis change); subsdk0 + sdk in 4 processes 17 s; the full lift 340 s in one
-  process (3 GB free: the old and the first new formula both gave 1). Workers now min(logical cores, (free - 1.5
-  GB) / 0.6 GB). Full lift, the same files every time: 2 processes (2.8 GB free) 195 s, peaks this process 606 MB,
-  workers 430 / 375 MB; 7 processes (6 GB free, reserve then 1 GB) 131 s, workers 365-429 MB, but free memory fell
-  to 0.72 GB, so the reserve went to 1.5 GB. Past ~4 workers the gain flattens (6 physical cores, the main process
-  takes results in order).
-- **`patches.txt`**: "if" alternates switched at run time, "call" / "after" host hooks. **Lifted code is per
-  machine: pulling a patches.txt change needs a re-lift; the build doesn't warn** (the weather mod first failed on
-  the laptop for that).
-- Calls follow AAPCS64 (SAVEC / LOADC: no flags, callee-saved not reloaded): CPU-only 4.41 -> 3.99 ms. Inline flat
-  indirect-call table (`call_ind_fast`). SP-based loads / stores as `LDS` / `STS` (volatile unless
-  `-DNX_STACK_PLAIN=ON`): no change. Lifted code at -O2 (`NX_LIFT_OPT`): ~3%, noise; default -O1. C vs C++ for
-  generated code: no difference. Decompiling the game to recompile natively: not worth it.
-- Register-argument design checked on clang-cl 19.1.5 (not committed): `__attribute__((preserve_none))` passes Ctx +
-  11 u64 in registers on Win x64, musttail and pointer calls work, a 16-byte struct return goes through memory.
-  Signature `NXCC u64 f_X(Ctx *c, u64 x0..x8, u64 sp, u64 x30)`; at bl store only written x19-x29 and X1; functions
-  reading x9-x18 before writing keep full SAVE; host functions keep `void (Ctx *)` behind thunks. Files: a64lift.py,
-  a64rt.h, dispatch.c, hos.h, nvn.c, a64test.py.
+- Bases: main 0x7100000000, subsdk0 0x7104800000, sdk 0x7105000000 (sizes 0x47d3000, 0x69a000, 0xda8000).
+- Function export: IDA (main 37 min, 165,000 functions) or Ghidra 12.1.3 (`tools/ghidra/ghidra_export.ps1 -Seeds`;
+  same `<module>_ida.json`; keep "Non-Returning Functions - Discovered" off: it cut 9,706 sdk functions short).
+  a64lift repeats function / jump-table recovery to a fixed point.
+- All 15.86 M instructions lift (6 header words in main stay traps). Jump tables IDA missed recovered by pattern
+  (`Mod.recover_switches`); BL-target function recovery; fall-through into IDA-split functions; weak imports nobody
+  defines get trap stubs (gRPC TLS, `getentropy`). `_writes` is exact (a Bink thread once jumped into an
+  unrecovered table because `ldr w19, [x7], #4` counted as writing Rt2).
+- Lua's luaD_throw needs setjmp / longjmp: host jump buffer table 256 per thread.
+- **Lift:** 911 files, ~1.2 GB of C. The module analysis is cached in `build/modcache`, keyed on a hash of the
+  analysis code (`analysis_version`): a lifter change elsewhere keeps it. Workers min(logical cores, (free - 1.5 GB) /
+  0.6 GB). Full lift: desktop 25 s (16 workers, warm cache), laptop 131 s (7 workers); analysis of all modules ~86 s
+  when redone. (2026-11-23 speed-ups: BR prefilter in `_maybe_table`, words from a uint32 view, compact cache, all
+  chunks to the pool at once, switches found by bisect; output byte-identical.)
+- **Build:** LIFT_JOBS=0 = min(cores, RAM / 2 GB), 3 GB per lifted compile job above -O1; -O3 for lifted code and
+  runtime since 2026-11-16 (`NX_LIFT_OPT`); full build ~4.4 min desktop, ~20 min laptop. Tests: `a64test` (`py -3.12`,
+  capstone + unicorn).
+- **`patches.txt`**: "if" alternates switched at run time, "call" / "after" host hooks (`h_<name>(Ctx *)`, Win64).
+  The lifter patches no branches: hook the instruction before or after. **Lifted code is per machine: a patches.txt
+  or lifter change needs a re-lift; the build doesn't warn.**
+- Calling convention per game (game.json `lift_cc`): Violet **sysv** (no xmm6-15 saves). Calls store x0-x17 only when
+  written since the last call and reload only what is read after (`call_masks`, exact); x19-x29 only for callees that
+  read them from their caller (`csr_flow`: per entry, must-written / must-spilled, needs passed through calls and tail
+  jumps; funcs.h `CSR_<entry>`, `SAVE_FOR`; BLR targets flagged in bit 0 of the function table). Returns keep SAVEC
+  (a callee's Ctx slot is the live value of registers it never touched). A hook site counts as reading x29 unless its
+  function wrote it on every path (lua.c `h_gc_fullgc` reads the caller's frame). Lessons the analysis needed, each
+  from a crash: spilled-on-every-path is never the caller's; per path and per entry, not per function;
+  `unw_getcontext` is a capture, not a use; setjmp passes nothing on. Debug lifts: `NX_CSR_POISON=1`,
+  `NX_CSR_KEEP=bl,blr,fp,x`, `NX_CSR_DEBUG=1`.
+- **Exclusive loops fused** (`excl_fusions`, `NX_EXCL_FUSE=0` off): `LD(A)XR; ops; ST(L)XR; CBNZ` as one host atomic:
+  exchange (18,822), fetch-add / sub (32,240), else a CAS loop (65,156). Kept out: branches into the sequence, Xn
+  written in it, hook sites, Rt = Rn, LDXP / STXP.
+- **PGO** (opt-in): `NX_PGO=gen` instruments lifted code, a64rt and the exe (the runtime writes `pgo-<pid>.profraw`
+  every 30 s and at exit); `llvm-profdata merge`, then `NX_PGO=use NX_PGO_PROFILE=x.profdata` (tree `build/cmake_pgo`,
+  profile `build/pgo/violet.profdata` from ~25 min of play; raw 6.1 GB). A profile fits one lift. IR-level
+  instrumentation (`-fprofile-generate`) would make the instrumented exe faster to play: not tried.
+- Not worth it: C vs C++ for generated code; decompiling the game to recompile natively; `NX_STACK_PLAIN`.
 
 ## Runtime fixes (kernel, services, audio)
 
-- Start-up: SDK 13 `nn::init::Start` with DT_FINI, TIPC (sm:), MapMemory from .bss / Normal memory, GetInfo 16 =
-  NPDM system resource size, MapPhysicalMemory (the game's 12 GB allocator; it also keeps data in the alias region,
-  `NXMOD_ALIAS_BASE`), GetInfo 20, time shared memory, CreateManagedDisplaySeparableLayer, nvnProgramSetShadersExt,
-  fsp 53 / other titles' saves = not found (SV probes 9 older Pokémon games), bcat (empty), csrng, btm, audout:u
-  (Wwise's output, 48 kHz stereo), hwopus, bsd:u (ENETDOWN), ngct:u; unknown commands answer with a stub object.
-  Library applet ids: 0x11 keyboard; web 0x13, 0x14, 0x17-0x1a. First boot: language, look, name (Enter + "Player",
-  or `NX_PLAYER_NAME`).
-- Lost wake-up in `condvar_wait`: the key's waiter flag must be set before the mutex is released (the SDK's Signal
-  skips the SVC while the key is 0; froze the job system).
-- audout: GetReleasedAudioOutBuffers zeroes the rest of the output array (a stale tag kept Wwise draining forever
-  under its global lock); buffers released on a playback clock.
-- **Crash at ~4,300 frames** (Bink movie with audio): Bink's sound backend (main+20c50) mallocs its renderer work
-  buffer + AudioRendererConfig from a 192 KB sub-heap (per-thread allocator at TPIDR_EL0+0x30). Our audren
-  GetWorkBufferSize said 0x29000 and overran a shader file's pages; now the console's sum (0x1d000 for 32 voices).
-  Found with `NX_WATCH_MEM` on the nlib heap's span tags (`TlsHeapCentral`, base 0x1040000000, span table +0xa48, 8
-  bytes / page).
-- audren REV7+ (Bink's renderer is REV10) starts the mix section with a 0x20 header {magic 0xCAFEBABE, count}, each
-  mix's id at +0x10 (read as volume, movie sound was noise). Quiet music: hwopus was silent; now libopus (vcpkg
-  `opus`; multistream layout unverified).
-- Keyboard applet config: texts and limit 4 bytes earlier than thought (header 0x34, sub 0xb6, guide 0x1b8, limit
-  0x3bc). The link-code keyboard is a Win32 input box (swkbd.c).
-- hid writes all 7 lifos of all 10 npads (main reads Handheld too; missing ones drifted the cursor / camera).
-  Six-axis lifos at NPAD +0x1758, 0x708 each.
-- Guest timed waits use QPC µs (was GetTickCount64, 15.6 ms steps); `timeBeginPeriod(1)` always; power throttling
-  (EcoQoS) opted out. svcSleepThread spins its last 0.25 ms.
-- Threads: the game pins main + render thread (5c) to core 0, workers 5a / 5b to 1 / 2: more emulated cores won't
-  help. Job-system condvar `main+b47d18` (job join): wake latency 5.4 µs to klk, 0.2 µs to a core.
-- kernel.c `kspin` (from TotK): a thread about to sleep in `block` / `core_acquire` polls ~20 µs with klk released
-  (`NX_KSPIN_US`; off below 6 logical processors). The first version hung the load (took a second core after the
-  last poll). Laptop ABBA: off 14.42 / 14.09 ms, on 14.47 / 15.79: no gain (GPU-bound, shared power budget). **Off by
-  default**; try on the RX 7800 XT.
+- Start-up: SDK 13 `nn::init::Start` with DT_FINI, TIPC (sm:), MapMemory from .bss / Normal memory, GetInfo 16 / 20,
+  MapPhysicalMemory (the game's 12 GB allocator; data also in the alias region), time shared memory,
+  CreateManagedDisplaySeparableLayer, nvnProgramSetShadersExt, fsp 53 / other titles' saves = not found, bcat
+  (empty), csrng, btm, audout:u (Wwise, 48 kHz stereo), hwopus (libopus), bsd:u (ENETDOWN), ngct:u; unknown commands
+  answer with a stub object. Library applets: 0x11 keyboard (a Win32 input box, swkbd.c; config texts 4 bytes earlier
+  than thought: header 0x34, sub 0xb6, guide 0x1b8, limit 0x3bc); web 0x13, 0x14, 0x17-0x1a.
+- Lost wake-up in `condvar_wait`: the key's waiter flag must be set before the mutex is released.
+- audout: GetReleasedAudioOutBuffers zeroes the rest of the output array; buffers released on a playback clock.
+  audren GetWorkBufferSize = the console's sum (0x1d000 for 32 voices; more overran a shader file: the ~4,300-frame
+  Bink crash, found with `NX_WATCH_MEM` on the nlib heap's span tags). REV7+ mix sections start with a 0x20 header
+  {0xCAFEBABE, count}, each mix's id at +0x10.
+- hid writes all 7 lifos of all 10 npads (missing ones drifted the cursor); six-axis lifos at NPAD +0x1758, 0x708 each.
+- Guest timed waits use QPC µs; `timeBeginPeriod(1)`; EcoQoS opted out; svcSleepThread spins its last 0.25 ms.
+- Threads: the game pins main + render thread (5c) to core 0, workers 5a / 5b to 1 / 2. The kernel moves a core's
+  owner to an idle core when a thread is ready behind it (`core_move`, `NX_CORE_MIGRATE=0` off: a save's helper thread
+  held 5a's core for ~65 ms). `kspin` (polls ~20 µs before sleeping, `NX_KSPIN_US`) off by default: no gain.
 - Saves are written in place (a crash mid-save can corrupt `main`); Z-A writes `<file>.pending` + MoveFileEx.
 
 ## Graphics
 
 ### Translator (Maxwell -> GLSL -> SPIR-V)
 
-- Bring-up added: BRX jump tables (from c[1]), PBK/BRK, loops (blocks rerun in a `while`), FCMP, IMNMX, BFI, TLDS,
-  SHFL / FSWZADD (quad subgroup ops), HADD2, HSETP2, ICMP, R2P, POPC, FLO, ISCADD.CC, ISET.CC, LDG.128, storage images
-  (SUST.P, SULD.P, SURED as image atomics; bound or bindless, NVN keeps image handles in c[2] at 0x120 + 8k), VMNMX,
-  VOTE, global ATOM (U32/S32), LEA; compute code starts at control word 0x708. c0[0x640] / c0[0x644] = base vertex /
-  instance (read as gl_BaseVertex / gl_BaseInstance; vertex id = gl_VertexIndex - gl_BaseVertex).
-- Scan vs hardware (Eden as reference; 6,009 shaders), fixed: NaN handling (`.SAT` -> `sat()`, FMNMX -> `nmin` /
-  `nmax`, F2I NaN -> 0x80000000; DenormFlushToZero 32 and SignedZeroInfNanPreserve 32 declared), I2I.CC flags, TLD4S
-  y from Rb, txq() for integer textures, IADD3.RS carry, STS/LDS shared memory sized from control 0x754, TMML
-  `uint(max(lod * 256, 0))`, FMUL.RZ (`fmul_rz`), I2F.RZ (`i2f_rz`), every FMUL/FFMA .FTZ, IPA.MULTIPLY's multiplier
-  (`in * gl_FragCoord.w * R(multiplier)`; soft particles passed 0 samples). Not taken: `precise` (measure first).
-  Latent (wrong but unused): HSETP2 compare bits / H_AND, F2F f16 rounding, I2F.U32.NEG, FMUL scale 7, PSETP 2nd
-  dest, ISCADD .PO, SHFL UP/IDX masks, BFE.S offset >= 32, MOV lane mask, IPA centroid / offset, mixed interpolation
-  in one vec4, S2R Y direction +1, SPH mrt_enable 0, depth-compare with LL/bias/1D, AOFFI on non-integer fetches,
-  LDL/STL / LDC out of bounds. Raised as Unsupported: IMAD, IMUL, PRMT, SHF, P2R, CSET, doubles, most f16, TLD4 PTP,
-  multisample TLDS.
-- Vertex-input variants: integer formats of 8/16 bits get shader variants with uvec4 / ivec4 inputs
-  (`translate.py --only=<hash>:<mask>`, 2 bits per location; runtime `shader_variant`). Only mask `01000000` is ever
-  needed (location 12 unsigned: XFB skinning bone indices). Plan: find integer inputs at build time.
-- Quality vs Eden's shader_recompiler: no `nonuniformEXT` on handles read from c[2] at a fixed offset; c[1] inlined
-  as literals (`cbuf()`): no frame change. Not done: XMAD triples -> one multiply, FSWZADD 0x99 / 0xA5 ->
-  dFdxFine / dFdyFine, `precise` (try if z-fighting). Not worth it: texture specialization (conflicts with offline
-  translation), global -> SSBO, structured control flow (only 8 shaders loop).
-- Alpha test is a specialization constant (ALPHA_FUNC): no discard without one.
+- Supports BRX jump tables, PBK/BRK, loops, storage images (bound or bindless; NVN keeps image handles in c[2] at
+  0x120 + 8k), subgroup ops, global ATOM, etc.; compute code starts at control word 0x708. c0[0x640] / c0[0x644] =
+  base vertex / instance.
+- Checked against Eden on 6,009 shaders; NaN handling (`.SAT` -> `sat()`, FMNMX -> NMin / NMax, F2I NaN -> 0x80000000;
+  DenormFlushToZero / SignedZeroInfNanPreserve declared), FMUL.RZ, I2F.RZ, .FTZ, IPA.MULTIPLY's multiplier, TMML.
+  Latent (wrong but unused): HSETP2 compare bits, F2F f16 rounding, I2F.U32.NEG, FMUL scale 7, PSETP 2nd dest,
+  ISCADD .PO, SHFL UP/IDX masks, BFE.S offset >= 32, IPA centroid / offset, S2R Y direction, depth-compare with
+  LL/bias/1D, AOFFI on non-integer fetches. Unsupported: IMAD, IMUL, PRMT, SHF, P2R, CSET, doubles, most f16, TLD4
+  PTP, multisample TLDS.
+- Vertex-input variants for 8/16-bit integer formats (`translate.py --only=<hash>:<mask>`); only mask `01000000` is
+  needed (XFB skinning bone indices). Alpha test is a specialization constant (ALPHA_FUNC); the integer-texture
+  choice of a fixed slot is the specialization constant `TEX_INT`.
+- Render scale in shaders: bit 18 of a handle marks a scaled texture, pc.scale its factor; the sub-pixel offset is
+  worked out once per shader (`rs_init`: 20 software integer divisions per scaled texelFetch were ~28% of the
+  lighting shader). Not done: XMAD triples -> one multiply, FSWZADD -> dFdxFine, `precise` (try if z-fighting).
 
 ### Shaders from the game files
 
 - `nxrecomp/tools/shader/extract/` (inside violetrecomp: `build.bat ..\build\ooz`, then `extract.py`, 80 s ->
-  `build/shaders_all/`, 23,083 .bin); `translate.py --spv ..\build\shaders_all` (340 s): 23,081 translated
-  (`455b72ede1cc5e2b` TLD and `baacde0ac4bf184d` fail, never used in play); SPIR-V 3.0 GB loose.
-  `package.ps1 -Out <dir>` translates everything and builds `shaders.pak` itself.
-- Shaders are BNSH: standalone (`.trsha`, `.bnsh`), in VFXB effects (`.ptcl`, `.trsot`, `.tracp`), SARC UI archives,
-  and 2 in `main.elf` (file offsets 0x43ec000, 0x43f4000: 40 engine shaders). BNSH: u64 {control, code} offset pairs
-  then sizes. GLSLC control starts `34 12 76 98`, graphics code `78 56 34 12`. nvn.c's shader hash = FNV-1a
-  (standard basis) of code[0 : control+0x704 (else 0x30 + control+0x6f8)]; all 6,032 seen in play are in the set.
-- Shader JIT: nvn.c queues a shader without SPIR-V; a host thread runs `translate.py --spv
-  --only=@build/shaders/jit_list.txt` (~2,300 at boot exceed a command line); draws wait. NX_SHADER_JIT=0 off,
-  NX_PYTHON picks the interpreter. SPIR-V in `build/shaders/spv/<translator version>` (FNV-1a of translate.py): a
-  translator change retranslates everything. Trick: swap a hand-edited SPIR-V in (move `pipelines.bin*` aside).
+  `build/shaders_all/`, 23,083 .bin); `translate.py --spv ..\build\shaders_all` (340 s): 23,081 translated (two
+  never used in play fail). `package.ps1 -Out <dir>` translates everything and builds `shaders.pak`.
+- BNSH: standalone (`.trsha`, `.bnsh`), in VFXB effects, SARC UI archives, 2 in `main.elf` (file offsets 0x43ec000,
+  0x43f4000). GLSLC control starts `34 12 76 98`, code `78 56 34 12`. nvn.c's shader hash = FNV-1a of
+  code[0 : control+0x704 (else 0x30 + control+0x6f8)].
+- Shader JIT: a host thread runs `translate.py --spv --only=@build/shaders/jit_list.txt`; draws wait (NX_SHADER_JIT=0
+  off). SPIR-V in `build/shaders/spv/<translator version>`: a translator change retranslates everything. Shaders
+  with a translation are loaded ahead on their own thread when the game creates them (`NX_SHADER_PRELOAD=0` off).
+  Trick: swap a hand-edited SPIR-V in (move `pipelines.bin*` aside).
 
 ### Vulkan side (gpu.c, vk.c)
 
-- **Spec-correct only** (rule since the AMD port): every early bug relied on NVIDIA's handling of undefined
-  behaviour; check with NX_VK_VALIDATION. GPU-assisted validation (gpuav_enable) caused TDRs on AMD: don't. Don't
-  trust GPU runs under a Win32 debugger. amdvlk aborts with fail-fast 7 on device loss (5 is the CRT's invalid
-  parameter). Device-loss hunting: VK_LAYER_LUNARG_crash_diagnostic (dumps in %USERPROFILE%\cdl) + NX_PIPE_LOG.
-- AMD fixes: GPU-culling compute `fba20ffd…` assumes 32-lane warps (compute pipelines require 32-wide subgroups,
-  EXT_subgroup_size_control, `vk.warp32`); unwritten vertex outputs read (0,0,0,1) (sky in quadrants); TLDS 2D
-  ARRAY.LZ takes x, y from Rb, Rb+1 (encoding 8 is 2D ARRAY.LZ, 3D.LZ is 7); single-sampled alpha to coverage ->
-  alpha >= 0.5 test (only with colour target 0); no D24 (D32S8 / D32), no dynamic logic op (in the pipeline key),
-  set 1 has one texture array per view type (TB_*, TEX_BINDING), 32-bit integer textures get same-bits float views,
-  c[16] in a free slot (`cb_of_slot`), robustBufferAccess2 / robustImageAccess2 where supported; blits the formats
-  can't do are skipped and logged (AMD: no depth format is a blit destination).
-- Targets render all layers / depth slices of their view (`view_layers`): the tonemap's 32x32x32 colour-grading LUT
-  (3D, f61) is drawn one slice per instance (layer = instance + c0[0x644] + 1); layerCount 1 gave a black screen.
-- Descriptor set 3 = texture pool entries as storage images (one level, no swizzle, sRGB as UNORM; storage-bound
-  images count as GPU-written).
-- CPU-written textures: only ranges of textures uploaded from guest memory are watched (GetWriteWatch over every pool
-  page was 86% of the render thread; `NX_REFRESH_POOLS=1` old way), scanned on their own thread; presents don't
-  wait for the scan (`NX_REFRESH_WAIT=1` old way). Three ways CPU-written contents stayed blank (from Z-A; the
-  missing-letters suspect): `image_find`'s container takeover counted as valid with non-image layers / levels zero;
-  `image_get` grown to more mips left new levels zero; partial `do_copy_buffer_to_texture` / WriteTexels into a
-  never-uploaded image. Now: containers upload guest memory and copy in only GPU-written parts, a grown
-  never-GPU-written image uploads whole, partial writes upload first.
-- GPU-written linear textures are copied back to guest memory at submission end (`linear_wrote` /
-  `linear_writeback`): the profile photo (`main+187bf80` UpdateCapture renders a pitch-linear 1920x1080 RGBA8 the
-  CPU BC1-encodes) was black.
-- Half-res depth (`960x540 f53 @12f10ac600`) is a scaled copy of 1080p depth AMD can't blit: `depth_blit` draws it
-  (`runtime/shaders/depth_blit.*`; regenerate depth_blit_spv.h with glslangValidator). Item ball pillars and raid den
-  beacons (soft particles in the 960x540 f41 effects layer `12f4f6a000`, composited by `acbcacd1…`) depended on it.
-- Feedback loops (`NX_FEEDBACK_LOG=1`, `feedback_check`): fs `3614c5d014241256` reads and writes the same 1x1 f46
-  target (exposure? lead for too-bright glows, untested); fs `8f2c86b8511ac03b` samples 1080p depth with depth writes
-  on. Fix would be copying the target first.
-- **Render scale 1-4x** (switchable live, `rescale_all` at a present): 16:9 targets from 120x68 up are made N times
-  larger when first drawn into; translate.py takes bit 18 of a handle and pc.scale (FragCoord, texelFetch, TXQ,
-  image coords). The menus draw the 3D player into a 400x800 target and mons into 360x360 ones with the 1080p depth
-  still bound; a pass runs at its smallest target's scale, so they stayed 1x (user: "720p upscaled", F12 frame 26444).
-  `image_promote` (2026-11-11, user-checked): a colour target drawn while a scaled depth is bound joins the scale (2D,
-  not linear, >= 64x64). Downscale by a box filter (vk.c
-  `downscale`, n x n bilinear taps, n up to 8). Render scale is supersampling; FSR 2/3 / DLSS need motion vectors and
-  jitter Violet lacks; SMAA / FSR 1 not done.
-- Graphics patches (gfx.c, patches.txt): Improved Graphic Quality (`if gfx`; NX_QUALITY=0) and no DOF (`if nodof`;
-  NX_DOF=1) on. **2K shadows (`if shadow`, `main+146e80c` mov w8 #0x400 -> #0x800) off: opening the map crashes**
-  (null read at main+c281d0; the patched code compares a size against 0x800 first). For a 1K / 2K / 4K toggle: find
-  what the map sizes from the shadow size. main+x in `build/image/main.img` is at file offset 96 + nsym * 16 +
-  strtab size + x (header in a64image.py).
-- Pipelines: built on 2 workers with the draw skipped (NX_ASYNC_SHADERS, netplay builds only; ~530 draws of a move's
-  effect skipped once); waits on a condition variable; cache kept between sessions (`build/pipelines.bin`, or
-  `pipelines.bins` with VK_KHR_pipeline_binary); `pipelines.list` prebuilt at start; one-entry memo of the last ready
-  pipeline.
-- **Code review of the GPU runtime (2026-11-14, laptop; built, one stand-still validation run `bench_gpufix`, not
-  played).** Fixed:
-  - alpha to coverage on one sample never tested alpha: the stand-in set the push constant, but shaders test the
-    pipeline's ALPHA_FUNC; now in the key (new pipelines: 19 draws skipped once in the first run while they built);
-  - F12 / NX_TRACE opened a second occlusion query inside the pass's (invalid): the pass's query is cut around
-    each draw instead (`occ_draw_begin`, `query_result`);
-  - an image destroyed or remade now drops only the set entries that held it (`images_gone`, `descset_drop_gone`),
-    not every entry of every set; entries without an image are looked up again when the pools change;
-  - ClearTexture clears its region (as an attachment; whole level only where the image cannot be one) and, like
-    CopyTextureToTexture into a part, uploads the destination's guest memory first;
-  - ReadTexels / WriteTexels go through the scaled copies (`copy_in` / `copy_out`);
-  - a pass's pipeline format is its view's (`view_format`);
-  - descriptor sets grow with a pool made again bigger, and one idle for 600 frames is reused past 8 / 12 / 6 sets;
-  - capture hazards ignore compute's buffers; indirect quads / line loops / polygons are skipped, not drawn as
-    triangle lists; a multisampled downsample that is no colour resolve is skipped and logged;
-  - core device features are asked for only where present (the log names missing ones); where
-    `dynamicPrimitiveTopologyUnrestricted` is false the topology class is in the pipeline key (PipeKey.compute bits
-    8-9, `NX_TOPO_CLASS=1` to test); counter reports into a destroyed pool are dropped (`occ_forget`);
-  - shader waits use a condition variable; two overflow staging chunks are kept; ASTC decodes on up to 5 helper
-    threads from 16,384 blocks up.
-  - Second pass the same day (built, validation run `bench_prevalid`: the same five known messages, **not played,
-    gain not measured**: a stand-still run streams nothing):
-    - a new image's layout change, zeroing and first upload go into the slot's pre command buffer (`pre_cmd`,
-      shared with the mirror copies): no pass ended and no barrier in the main one for a texture a draw binds for
-      the first time. The zeroing waits in `zero_list` and is dropped when guest memory is uploaded over the whole
-      image in the same submission (`images_zero` at the flush records the rest). Later uploads (CPU rewrites,
-      scaled images) are recorded in order as before;
-    - the image budget is asked of the driver (VK_EXT_memory_budget, every 30 frames): 90% of the heap's budget
-      less what we hold there that is no image (mirrors, staging); without the extension 55% of the heap less the
-      mirrors. Laptop: 2,590 MB (was 2,164), logged again when it moves by an eighth.
-    - Left: ASTC still decodes on the render thread under gpu_cs (only spread over helpers); one `Sleep(0)` spin
-      while another thread starts the translator thread (once per run).
+- **Spec-correct only**: early bugs relied on NVIDIA's handling of undefined behaviour; check with NX_VK_VALIDATION
+  (known messages: four SPIR-V ones on AMD, `vkResetQueryPool` with NX_GPU_TIMELINE). GPU-assisted validation caused
+  TDRs on AMD. Device loss: VK_LAYER_LUNARG_crash_diagnostic + NX_PIPE_LOG.
+- AMD fixes: compute needs 32-wide subgroups (`vk.warp32`); unwritten vertex outputs read (0,0,0,1); TLDS 2D ARRAY.LZ
+  coordinates; single-sampled alpha to coverage -> alpha >= 0.5 test (in the pipeline key); no D24 (D32S8 / D32);
+  32-bit integer textures get same-bits float views; robustness2 where supported; unsupported blits skipped and
+  logged (no depth blit destination: the half-res depth `960x540 f53` is drawn by `depth_blit`).
+- Targets render all layers of their view (the tone-map's 32^3 LUT is drawn one slice per instance). Descriptor set 3
+  = texture pool entries as storage images.
+- CPU-written textures: only ranges of uploaded textures are watched (write watch, own thread); containers upload
+  guest memory and copy in GPU-written parts; grown or partially written images upload first. GPU-written linear
+  textures are copied back at submission end (the profile photo).
+- **Render scale 1-4x** (live, `rescale_all`): 16:9 targets from 120x68 up are made N times larger when first drawn
+  into; a colour target drawn with a scaled depth bound joins (`image_promote`: the menus' 3D player / mons). Box
+  downscale to the window (vk.c `downscale`).
+- New images' layout change, zeroing and first upload go into the slot's `pre` command buffer; image budget from
+  VK_EXT_memory_budget (90% of the heap's budget less mirrors / staging). Pipelines: built on 2 workers with the draw
+  skipped (NX_ASYNC_SHADERS, netplay builds), cache `build/pipelines.bin(s)`, `pipelines.list` prebuilt at start.
+- Real occlusion queries for the samples-passed counter (`gpu_query.c`, `NX_OCCLUSION=0` off; the old made-up total
+  made far house lights and the moon flare; user 2026-11-13: nothing looks off). `SetRenderEnableConditional` ignored.
+- Feedback loops (`NX_FEEDBACK_LOG=1`): fs `3614c5d014241256` reads and writes one 1x1 f46 target (lead for too-bright
+  glows); fs `8f2c86b8511ac03b` samples 1080p depth with depth writes on.
+- Left from the 2026-11-14 code review: texture pool entries repointed under recorded draws, ClearColor layer 0 only /
+  no channel masks, D32F copied out where the game has D24S8, ASTC decoded under gpu_cs (spread over helpers).
 
-  Left: texture pool entries repointed under draws already recorded (remade images; needs a run at 2x with
-  validation first), new images and uploads still end the pass (the `pre` buffer idea), the image budget (55% of
-  the heap), layer 0 only and no channel masks in ClearColor, D32F copied out where the game has D24S8. Not
-  exercised by the run: F12, render scale above 1, partial ClearTexture, a reused set. Validation messages are the
-  same five as before (`bench_val3`, `bench_rv`): four about SPIR-V on this GPU (no DenormFlushToZero), and
-  `vkResetQueryPool` on a pool in use (with NX_GPU_TIMELINE, which bench.ps1 sets).
+### Graphics patches (gfx.c, patches.txt)
+
+Improved Graphic Quality (`if gfx`, `NX_QUALITY=0` off), no DOF (`if nodof`, `NX_DOF=1` keeps it), **2K shadows**
+(`if shadow`, `NX_SHADOWS2K=0` off; on since 2026-11-23, user-checked): `main+146e80c` mov w8 #0x400 -> #0x800 and
+`main+146e770` mov w9 #0x10c00000 -> #0x14000000 (NVN pool slot 4 at the game's own 320 MB: with the shadows alone,
+opening the map asked that pool for 56 KB and got null; `main+c28198` -> best-fit allocator `c28244`, `c281d0`
+reads through the null). `h_heap_oom` (`main+c28230`, only after a failed allocation) logs size, the heap's words
+(NVN pool: "HNVN" at +0x158, size +0x128) and the frame chain. A 4K option would need that pool sized for it.
+`NX_GFX=0` all off. main+x in `build/image/main.img` is at file offset 96 + nsym * 16 + strtab size + x.
+
+### FSR 2 anti-aliasing (2026-11-21/23, user-checked)
+
+- AMD FidelityFX FSR 2.2.1 (`deps/FidelityFX-FSR2`, MIT). `tools/fsr2/fsr2_shaders.py` builds each pass's SPIR-V in 8
+  variants (depth inverted, sharpening, reprojection Lanczos table: the backend asks for it on wave64 AMD) with the
+  SDK's glslang and the resource tables with spirv-cross; no AMD executables run. `runtime/fsr2.cpp` (context,
+  jitter, dispatch), `runtime/gpu_taa.c`, `shaders/taa_mv.comp`.
+- **Frame map** (frame 12000, 1x, 376 draws): 128 XFB skinning draws, a 1024^2 shadow map (52), the G-buffer (102
+  draws, colour slots 1-4, depth f53 1920x1080), quarter-size passes, the lighting triangle (vs `5250e040`, fs
+  `fd87a85c`) into `@12f5ee2000` (RGBA16F) + 31 transparents, a bloom chain, **the tone-map fs `4b80c6ba33bcbb5b`
+  into the shown image**, 20 HUD draws, a last copy. **Camera:** vertex c[5] = view-projection by columns, reversed-Z
+  infinite, near 0.32, vertical FOV 46°.
+- game.json `"taa": {"resolve_fs": ..., "camera_cb": 5}`. Jitter (viewport offset) on draws with the scene depth but
+  not full-screen triangles; after the tone-map draw: camera motion vectors (one reprojection matrix last VP x inverse
+  VP, **made in double**: in float the camera translation left it off by a fraction of a pixel, differently each
+  frame, which flickered edges and distant shadows), FSR 2 into RGBA16F, blit back, then the HUD. +0.25 ms GPU at
+  1080p. Overworld log (`taa: last 600 frames`): every frame resolved, ~750 jittered draws a frame.
+- Menu: Options > Video > Anti-aliasing (Off / FSR 2 native), Sharpening, Jitter (dev); settings.ini `taa`,
+  `taa_sharpness`; NX_TAA / NX_TAA_SHARPNESS decide at start when set. UiHost version 4.
+- Open: upscaling presets (Quality 1.5x, Balanced 1.7x, Performance 2x, the user's 1.33x) need a fractional render
+  size plus a negative texture LOD bias; reactive mask. Frame generation dropped (the user, 2026-11-23: camera-only
+  motion vectors would ghost moving creatures).
 
 ### Open rendering issues
 
-- **Far house lights and the moon flaring over the screen, not always** (the user, 2026-11-13): the samples-passed
-  counter (NVN counter 1). The game resets it, draws, and has it reported (one pair a frame at the title; the
-  report there is 1,036,800 = 1920 x 540). Ours answered a made-up total that grew by 65,536 with every report of
-  any counter (83 million by the title), never reset. **Fix (nxrecomp `gpu_query.c`, `NX_OCCLUSION=0` the old
-  answers; built 2026-11-13, booted to the title with validation: only the two known messages; not played):**
-  real occlusion queries, one open in every pass once the game uses the counter, cut at each report and reset;
-  the sums are made on the CPU when the submission is done, before a guest thread can see that it is
-  (`gpu_completed`, `gpu_wait`), in the game's pixels (divided by the render scale squared). Log: `gpu: samples
-  passed: a submission with ...` (the first four). To check in play: the lights and the moon; trees and other
-  occlusion-tested objects near the camera (culling is real now, a frame late as on the console: popping?);
-  GPU time with a query open in every pass. `SetRenderEnableConditional` is still ignored.
-- **The spinning white Poké Ball sign above Pokémon Centers ghosts at its edges** (the user, 2026-11-13, at 2x;
-  the user suspects the render scale). Not looked at: compare at 1x (Options > Video switches live), then F12.
-- The far house lights and the moon: "nothing looked off with lighting" (the user, 2026-11-13, after the
-  occlusion counts).
-- **Rain:** splashes, distant sheets and wet surfaces show; no streaks near the camera. The half-res effects layer
-  (`960x540 f41 @12f4f6a000`) has 7 lit pixels: streaks never drawn. Laptop, weather mod at Poco Path (logs
-  `build/frames/rain-*`, `rain2-*`, `rain3-*`): forced rain / thunderstorm leave the sky blue and the ground dry; rain
-  adds no draws; thunderstorm adds white falling dots (full res) and 8 tall quads (soft particles vs
-  7a1f81cac22350a1 fs df61a3468379ebd4) with 0 samples even with depth test off. Ruled out: skipped draws (no
-  DrawTexture / XFB / multi-draw), particle clocks (cb10[2].x all alive), the depth copy. Light shafts (vs
-  6e7faccfa4d7de47) there: 0 samples with depth test on, 326k-590k off: check the half-res depth test (ds
-  `@12f541a000`, written by d4ea93c14e5c47f0). The opening area may have no weather of its own: test natural rain
-  after the prologue.
-- **Missing letters:** whole glyphs blank wherever they appear ("Mareep" as " a eep", battle labels "oundoom"),
-  whole again later. Suspect the run-time glyph atlas (CPU-written); likely fixed by the CPU-written texture fixes
-  above: check text after a long session. F12 captures `build/frames/frame_49186*`, `frame_55343*`.
-- Earlier, unconfirmed whether still there: the Let's Go glow too bright; huge coloured glows from `?` / `!` markers
-  near the camera (suspects: blend factors, the feedback case fs 3614c5d0, depth clamp on in every pass); the "…"
-  thought bubble shows only grey corners (draws `de9e66ba…` / `f3fbc253…`, BC3 sRGB atlas); cyan-white streaks in the
-  air in Mesagoza (`frames/frame_14699.ppm`). Validation still reported: shadow pass R8_UINT target sampled as float,
-  A2C without alpha output, integer attributes into float inputs, a point-list topology mismatch, interface
-  mismatches (RuntimeSpirv-Location-06272, OpEntryPoint-08743).
+- **Missing letters:** whole glyphs blank ("Mareep" as " a eep"), whole again later; seen again 2026-11-12 after the
+  CPU-written texture fixes (F12 capture `build/frames/frame_23259*`: targets `240x135 f63 @12f1c36000`, `1920x1080
+  f63 @12f6752000`, `30x16 f63 @12f1bd1800`). Suspect the run-time glyph atlas. Not looked at yet.
+- **Rain:** splashes, distant sheets and wet surfaces show; no streaks near the camera (the half-res effects layer
+  `960x540 f41 @12f4f6a000` has 7 lit pixels). Weather mod tests (laptop, `build/frames/rain*`): forced rain leaves the
+  sky blue; thunderstorm's 8 tall quads (vs `7a1f81cac22350a1` fs `df61a3468379ebd4`) pass 0 samples even with depth
+  test off. Ruled out: skipped draws, particle clocks, the depth copy. Lead: the half-res depth test (ds
+  `@12f541a000`, written by `d4ea93c14e5c47f0`). Test natural rain after the prologue.
+- The spinning Poké Ball sign above Pokémon Centers ghosts at its edges (2x; compare at 1x, then F12).
+- Unconfirmed whether still there: the Let's Go glow too bright; huge glows from `?` / `!` markers; the "…" bubble
+  shows only grey corners (draws `de9e66ba…` / `f3fbc253…`); cyan-white streaks in Mesagoza. Validation still reports:
+  shadow pass R8_UINT target sampled as float, A2C without alpha output, integer attributes into float inputs, a
+  point-list topology mismatch, interface mismatches (Location-06272, OpEntryPoint-08743).
 
 ## Frame rate
 
 - **Any frame rate plays at normal speed** (user-checked at 120). The game steps by a duration from a table
   (`main+3c2fbb0` = table[present interval - 1]) and derives speed from it (`main+d9643c`); `fps.c` writes the entry
-  every frame (rodata via VirtualProtect, page kept writable: re-protecting raced) and keeps the speed divisor at 30.
-  Animation timer `main+b92784` (h_fps_timer_step) fixed in every scene kind except 2. Frame update `main+2b79f60`
-  gives each clock a duration from table `3c2fba8` (16.7 / 33.3 / 50 / 66.7 / 83.3 ms); readers call vtbl[0](obj, 1)
-  and read +8 (100 sites).
-- Effects froze above ~60 fps: the effect manager (`main+2039640`) steps VFX emitter sets (`b85c44` -> `7e5924`) by
-  `(int)(duration / 16666666.0)`; hook `fps_effect_frames` (patches.txt `main+20397d0`) gives the fraction. Open:
-  particles may look too fast uncapped (then step in whole 60 Hz frames carrying the remainder).
-- Map to Fl4sh's "60 FPS" / "Dynamic FPS (ASM)" pchtxt (`mods-ref/`; pchtxt addresses = main.elf addresses, build id
-  709BFD66...). Not ported: its movement scaling at `cce37c` (stutter walking; lead for **Fletchinder flying too
-  fast** at 60, F12 frame `build/frames/frame_4272*`), its code-cave NOP at `1526d64`, its `2b7a874`. Not clocks:
-  60.0 at `170c408`, 100000.0 at `20a8d3c`.
-- Parked: cutscenes run fast above 30 (fine at 80-90, teleports at 120+). Scene kind (`main+2936584`, setter
-  `29364c8`) stays 0 in cutscenes; `b926f0` posts one global step (timer 2, from `main+27b04`) forced to 33.3 ms in
-  kind 0.
-- Day / night has no frame-rate link: clocks are real time. `e0b960` is an 86400 s day; `GlobalTimeSpeed` is a render
-  setting; `timeOfDayHours` / `dayTime` / `nightTime` come from a FlatBuffers parameter file (loader `1513f24`);
-  `CFunc_Tml_ResetGameTime` is a Lua command. `NX_TIME=<unix>` pins the clock.
-- Switches: `NX_FRAMERATE=60|120|0` (default 60 via `game.json`), F5 cycles; NX_NOPACE=1 uncapped (IMMEDIATE above 60
-  without MAILBOX).
+  every frame (page kept writable: re-protecting raced) and keeps the speed divisor at 30. Animation timer
+  `main+b92784` fixed in every scene kind except 2. Frame update `main+2b79f60` gives each clock a duration from table
+  `3c2fba8`; readers call vtbl[0](obj, 1) and read +8.
+- Effects stepped VFX emitters in whole 60 Hz frames (`main+2039640`, `(int)(duration / 16666666.0)`): hook
+  `fps_effect_frames` gives the fraction. Open: particles may look too fast uncapped.
+- Map: Fl4sh's "60 FPS" / "Dynamic FPS" pchtxt (`mods-ref/`). Not ported: movement scaling at `cce37c` (lead for
+  **Fletchinder flying too fast** at 60), `1526d64`, `2b7a874`. Not clocks: `170c408`, `20a8d3c`.
+- Parked: cutscenes run fast above 30 (fine at 80-90, teleports at 120+); scene kind (`main+2936584`) stays 0 there.
+- Day / night is real time (`e0b960`, 86400 s); `NX_TIME=<unix>` pins the clock.
+- Switches: `NX_FRAMERATE=60|120|0` (default 60), F5 cycles; NX_NOPACE=1 uncapped.
 
 ## Performance
 
-### Where things stand
+### Where things stand (2026-11-23)
 
-- **RX 7800 XT + 7800X3D**, stand-still: 4.8-5.3 ms (187-207 fps), GPU busy 3.1 ms, translation 2.2; **main is the
-  limit** (~71% running; blocked 16% at job join `main+b47d18`, ~6% on the game's mutex `main+ccc41c` between main
-  and 5a / 5b in a physics step: `2a78764` -> `ccada8` -> `ccc00c` -> `ccdeac`). Mesagoza uncapped 150-195. CPU-only
-  (NX_GPU_SKIP=1) ~250 fps: the frame is a chain of hand-offs between main and the workers, not one thread's speed.
-- **At 2x scale**: 146 fps uncapped, GPU busy 5.73 ms (GPU-bound), lows 90-100; capped 60: 26 of 29 windows locked,
-  slow frames have translation at 5-9 ms instead of ~2.5 (target 120, user).
-- **GTX 1650 Ti laptop**: ~14 ms (70-80 fps), GPU busy 9.4, idle 4.5 (1.8 at submission start, 2.3-3.0 between
-  flushes); translate 7.4 + GPU 9.6 in series. Was 23-29 fps: the 367 MB CPU_UNCACHED | GPU_CACHED pool (every mesh,
-  index, UBO) was read over PCIe 3.0 x8. Pools >= 8 MB that are GPU_CACHED and CPU-visible are mirrored in VRAM
-  (NX_POOL_MIRROR=0 off): CPU-written pages (write watch, scanned per guest submit ~0.5 ms) copied in by a `pre`
-  command buffer, GPU copies / clears go to both, ranges written by storage buffers or XFB read from host memory from
-  then on. G-buffer 19-24 -> 1.0 ms. **On AMD the mirror loses** (137-167 vs 155-205 fps): AMD runs use
-  NX_POOL_MIRROR=0; turn it on only where it pays (open).
-- Native estimate (docked Switch uses its whole 33 ms; CPU ~12-15x per thread, GPU ~50x, bandwidth ~24x): game logic
-  ~2.2-2.8 ms, GPU work ~0.7 ms. Measured GPU was ~8x off before the translator fixes.
+- **Desktop (RX 7800 XT + 7800X3D), 1x:** CPU-bound. At the old bench spot ~4.3 ms (230 fps) after the lifter work
+  (was 5.0); the bench save moved 2026-11-21 and the new spot runs ~2.0 ms, so compare within a day only. **The frame
+  is main's own code** (NX_TRACE: main runs ~3.4 ms on CPU, ~97% of it on a host core; its blocks are waits for the
+  workers' jobs, ~5 µs a hand-off). Lifted-code cost is per call, not per instruction (handport: loops compile as
+  native; entries, call sites and exclusives pay).
+- **Desktop, 2x:** GPU-bound, ~6.0 ms (GPU busy 5.7-6.0); ~2.5 ms of GPU work does not scale with the scale (shadows,
+  unscaled passes, skinning, small draws), ~0.85 ms per 1x of pixels. Lighting draw ~1.0-1.4 ms at 2x. At 120 fps
+  capped: some areas 97-110 fps, all GPU wait.
+- **GTX 1650 Ti laptop:** ~11-12 ms (85-90 fps), GPU-bound; pool mirrors in VRAM there (`NX_POOL_MIRROR`; they lose on
+  AMD, which runs with them off).
+- Long sessions: the game's own full Lua collections (50-70 ms every 4-12 s) answer **failed allocations**
+  (`main+eb071c`: collect, retry `eb0890`, abort if it still fails); which heap fills is open.
 
 ### How to measure
 
-- **Stand-still benchmark**: `violetrecomp\bench.ps1 <name> [NX_X=v ...]` copies `build/save` to
-  `build/save-idle-run`, runs with NX_NOPACE=1, NX_TIME=1792494000, presses A through the title (to frame 4000),
-  hands off; averages `nvn: frame time` and NX_GPU_TIMELINE busy after the load hitches (log
-  `build/bench_<name>.log`; `-Summary`; `-Rgp <frame>`). ~135 s (the scene starts 30-100 s in). Spread ~0.2 ms: run
-  A/B pairs ABBA; two 600-frame windows are too noisy. To compare exes swap `build\cmake\violetrecomp.exe` (check the
-  hash; the first run after a swap is ~0.1 ms slow). Clear env switches between runs in one shell.
-- Benchmark save `build/save-bench` (for hitches; copy first): a ~5 min scripted scene on game time; compare whole
-  runs. Day / night moved GPU cost 19 -> 24 ms there: pin NX_TIME.
-- Log lines every 600 frames: `nvn: frame time` (avg, 1% low, worst), `gpu: per frame` (translating / presenting /
-  waiting), `cpu:` per thread, `gpu: threads this frame:` (core hold / wait). NX_GPU_PROF=1 per pass (inflates
-  around barriers), =2 per shader; NX_GPU_TIMELINE=1 GPU timestamps per submission (busy / idle); NX_HITCH_MS=<ms>
-  splits slow frames (translating / presenting / GPU wait / shader loads / JIT / pipeline builds / images / uploads /
-  slot waits / mirror copy-in); NX_PROFILE=<up to 4 threads> samples slow frames (its own report hitches every 600
-  frames: read lows from runs without it), and splits lifted samples by instruction kind (calls ~23%, loads / stores
-  27%, integer 29%).
-- **RGP** works on Adrenalin **26.10.2** (25.9.2 lost the device / hung Windows on any capture): `.tools\rdts\
-  RadeonDeveloperToolSuite-2026-10-02-1872\RadeonDeveloperPanelCLI.exe -m profiling -p <name>
-  --rgp-auto-capture=frame:N -o <file>.rgp` (N >= 5; `--rgp-sqtt-buffer-size high`; wait for the .rgp). NX_GPU_LABELS=1
-  names passes `pass WxH c<i>:<fmt> ds:<fmt> @<addr>`, draws `draw vs <hash> fs <hash>`, barriers by gpu.c line.
-  Windows' GPU counters show 0% for us.
+- **Stand-still bench**: `violetrecomp\bench.ps1 <name> [NX_X=v ...]` copies `build/save` to `build/save-idle-run`,
+  NX_NOPACE=1, NX_TIME=1792494000, presses A through the title (needs the user's OK each round), averages `nvn:
+  frame time` and NX_GPU_TIMELINE busy after the load (`build/bench_<name>.log`, `-Summary`, `-Rgp <frame>`). At 1x
+  pass `NX_RES_SCALE=1 'NX_INPUT=300-9000/60:A'`. Spread ~0.2 ms: A/B in ABBA order, window medians, the same day;
+  ask the user to pause video first (DWM). A fixed bench save would stop the scene moving with the user's play.
+- Log lines every 600 frames: `nvn: frame time`, `gpu: per frame`, `cpu:` per thread. NX_GPU_PROF=1 per pass, =2 per
+  shader; NX_GPU_TIMELINE=1; NX_HITCH_MS=<ms> splits slow frames; NX_PROFILE=<threads> samples slow frames.
+- **NX_TRACE=<frame>[,<n>]**: a Chrome trace (`build\trace-<frame>.json`, ui.perfetto.dev) of every guest thread's
+  running / waiting / blocked spans with guest callers, the runtime's work and GPU submissions;
+  `py -3.12 nxrecomp\tools\trace_summary.py <json>` per frame.
+- **RGP** on Adrenalin 26.10.2 (25.9.2 hung Windows): `.tools\rdts\...\RadeonDeveloperPanelCLI.exe -m profiling -p
+  <name> --rgp-auto-capture=frame:N -o <file>.rgp`; NX_GPU_LABELS=1 names passes and draws. Offline ISA: `rga.exe -s
+  vk-spv-offline -c gfx1101 --isa` on a `.spv`.
+- `build/handport/`: one lifted function vs typed C++ from Hex-Rays, compiled and counted (`build.bat <off>`,
+  `count.py`): recounts a function after a lifter change without a game run.
 
-### Done (kept)
+### Done (kept, with what each gave)
 
-Submit and present give the emulated core up; flush every 250 draws (`NX_FLUSH_DRAWS`) with early flushes doubling
-from 32 (`NX_FLUSH_FIRST`, 6.60 -> 6.09 ms; not tried on the laptop with mirrors); presents on their own thread
-(NVIDIA's vkQueuePresentKHR blocked ~4-5 ms under Optimus; second queue or `queue_lock`; uncapped, a frame arriving
-mid-present is dropped); shaders interned via hash maps; stage_ubos reuses unchanged c[0] / c[2] staging and pushes
-only declared slots; draw() records only changed state; pool_find tries the last hit; descset_use skips unchanged
-draws; DMB / DSB load- or store-only = compiler barrier, full = `lock or (%rsp)`; FRSQRTE memoised; wakes sent after
-klk is released; translation 3.42 -> 3.13 ms (vk_format memo, word-wise pipe_bucket, set_vertex_input skipped when
-unchanged: only grew the GPU wait); narrower pass-end barriers (`pass_att_writes`, NX_FULL_BARRIERS=1 old); images
-MUTABLE_FORMAT only with a format list (NX_MUTABLE_ALL=1 old); passes kept over a re-set of the same targets
-(NX_SAME_RT=0 off); frame stalls (1% lows 20-47 ms at 60 -> locked 60): new pipelines off the draw, pool imports
-outside gpu_cs, nvnQueueFenceSync gives up the core; a getenv per storage buffer per draw removed (switches read once).
-
-### Frame stalls at 60 / 120 capped, 2x (2026-11-12, user sessions with NX_HITCH_MS, RX 7800 XT)
-
-- **Lua's collector was the 40-150 ms main-thread stall** (main holds its core, nothing else busy; one every 45-75
-  s). The game keeps the collector stopped and drives it once a frame (`main+c8c36c`: `lua_gc` = `main+c8c520`,
-  variadic; STEP then STOP; COLLECT after 300 s without a full one, timer at `7104759d08`, flag `[71046cb850]` set
-  by any full collection). Generational mode (the VM starts incremental with `lastatomic` set, i.e. generational
-  after a bad major collection, and turns generational within the title): young collections only, old garbage
-  grows from ~57 MB to the allocator's limit (~70 MB), then `luaM_` calls `luaC_fullgc(L, 1)` (`main+2b690`;
-  `fullgen` `main+2b840`, `luaC_step` `main+2ac30`, `luaS_newlstr` `main+3be00`). global_State: totalbytes +10,
-  GCdebt +18, GCestimate +20, lastatomic +28, currentwhite +64, gcstate +65, gckind +66, genminormul +68,
-  genmajormul +69, gcrunning +6a, gcemergency +6b. **Fix (lua.c, patches.txt; `NX_LUA_GC=0` off):** hooks beside
-  the routine's STEP call switch the VM to incremental (pause 100, step multiplier 12) and step 1 KB over the
-  debt; the 300 s COLLECT becomes COUNT. Field, 120 fps: 2.7-3.5 MB/s allocated, steps 0.27-0.33 ms a frame
-  (generational at the title: 0.14), longest 6-8 ms (once a cycle, about every 2 s: open, probably the atomic
-  phase), heap 58-65 MB, no emergency collection in 9 minutes. `lua: ` lines every 3600 steps and at each full
-  collection. Forcing STEP data 1 without leaving "declared generational" made every step a whole mark and the
-  heap sit at 60+ MB: the switch must clear `lastatomic` (lua_gc INC does).
-- **Present jitter:** a frame was presented when its work was done, so 7% of frames at 60 were 2-8 ms late on
-  screen while `nvn: frame time` (measured after the pacing sleep) said 16.67. `hold_present` (nvn.c) holds a
-  finished frame until the longest recent work + 0.3 ms after its tick (at most 3/4 of the period;
-  `NX_PRESENT_HOLD=0` off): 7% -> ~1%. The `gpu: slow frame` line measures present to present, `nvn: frame time`
-  tick to tick: read both.
-- **Host imports freed on their own thread** (gpu.c `junk_loop`): vkFreeMemory of an import (FreeGpuVirtualAddress /
-  DestroyAllocation2) was 17% of the render thread's samples in slow frames. Effect on the 20-125 ms translation
-  spikes with nothing attributed: not measured apart yet.
-- **The game's own full collections were the 50-70 ms hitch every 4-12 s** (the 60 fps session of 2026-11-12,
-  `build/run-session-1112.log`: 214 of the ~560 frames over 25 ms, main holding its core, a `luaC_fullgc(emergency
-  0) from main+c8c5dc` line before each). `main+25ff7d0` takes the VM's lock and calls `lua_gc(L, LUA_GCCOLLECT)`
-  (`25ff818` tail call / `25ff83c`); it is reached through the function pointer at `[main+46d3928]` (`if (p->fn)
-  p->fn(p + 0x20)`) from 14 places that let go of script objects (most often `c50e14`, `c31b54`, `ff172c`). Its
-  neighbour `main+1107154` is `lua_gc(L, LUA_GCGEN, 0, 0)`. **Fix (lua.c `h_gc_request`, patches.txt; built
-  2026-11-12, booted to the title, not played yet; **withdrawn the same day: it crashes, see the crash entry below**):** the request becomes LUA_GCCOUNT and the paced collector
-  hurries (200 KB a step, ~2 ms a frame) until two cycles have ended, so what was let go is freed within about
-  half a second. `NX_LUA_GC=2` keeps the paced steps with the game's full collections. The `lua: collector` line
-  now counts the requests. To check in play: no `luaC_fullgc` lines from `c8c5dc`, `longest` under ~3 ms, heap
-  still 58-65 MB, and nothing that depended on the collection being done at once (objects' finalisers run up to
-  half a second later).
-- Rest of that session's frames over 25 ms (after the title): 158 with all threads busy (loading), 85 presenting,
-  60 shader loads, 24 GPU wait, 7 pipelines, 7 uploads. **Presenting 20-37 ms** comes in runs of 10-40 frames and
-  is inside `vk_present` between the acquire and the submit (fence, acquire, submit all ~0): recording the
-  present's commands, i.e. the downscale pass, the overlay or the menu / mods' ImGui draw. Not split yet: time
-  `ui_draw` / `mods_draw` apart in `vk_present_times` and note whether a mod window was open.
-- **A save was a ~100 ms frame** (manual or automatic, not told apart: the user saved by hand once or twice in
-  these sessions; identified by `main`'s write time matching one of them; 3 in a 3-minute session, `build/run-session-1112b.log`; the same signature
-  in the session before): after two `prepo:u` 10105 calls main starts a thread that starts another (priority 44,
-  cores 0-2), which took the free core 1 and kept it ~65 ms; job worker 5a (core 1 only, same priority) waited
-  behind it while main waited for 5a on an idle core 0. The console's scheduler moves such a running thread to the
-  idle core; ours did not. **Fix (nxrecomp kernel.c, `core_move`; `NX_CORE_MIGRATE=0` off):** a core's owner that
-  may use an idle core moves there when a thread is ready behind it (checked when a core goes idle and when a
-  thread finds its cores taken). User session after it (`run-session-1112c.log`, 60 fps, 2x): its one save frame
-  44.5 ms (main's own 40 ms of work), every window after loading at 60.0 with the worst frame 17-47 ms, one frame
-  over 50 ms in the field (a 58 ms shader load); 3-7 moves a frame in ordinary play (`cpu:` line).
-- The presents' recording time is split in the slow-frame line (`recording`, `menu and mod windows`, `mods'
-  draws`). With the menu open: 7-9 ms a frame in `menu and mod windows` (ImGui), once 15.9 ms `recording` on the
-  first frame. The 20-37 ms runs of the earlier session are probably a mod window's ImGui; not reproduced yet.
-- The game's full-collection requests did not happen at all in those two sessions (`0 full collections asked`):
-  what triggers them is not known, and the hurry path is still unplayed.
-- **Shader loads in the field** (the 58 ms frame: 3 loads, 45 ms) are not translations: every shader the game
-  has is translated already (`JIT waits 0`). The time is `shader_load` on the render thread at a shader's first
-  draw: reading its loose `.spv` (8,111 files), scanning it and vkCreateShaderModule. **Fix (gpu_shader.c,
-  `preload_thread`; `NX_SHADER_PRELOAD=0` off; built 2026-11-12, booted, not played yet):** `gpu_shader_created`
-  queues a shader that has a translation for a thread that loads it then (the game makes shader objects while it
-  loads); `ShaderCode.load_state` settles who loads when a draw gets there first. 4,000+ loaded ahead in the first
-  45 s. To check in play: `shaders N ms (n)` in field slow-frame lines near 0. A new pipeline for a new shader is
-  still built off the draw (its draws skipped until done), as before.
-- **120 fps at 2x after the fixes above** (user session, `build/run-session-1112d.log`, NX_HITCH_MS=10,
-  NX_GPU_TIMELINE=1, window 2560x1440): the stalls are gone (15 frames over 16 ms and 3 over 25 ms in ~3 minutes
-  of play after loading, none over 50; no shader load in any slow frame, so the preload works; no full-collection
-  request again). What is left is the GPU: 1,883 of 2,016 frames over 10 ms are GPU wait. GPU busy 6.7 ms a frame
-  where 120 holds (1% low 9-12 ms) and 8.1-9.2 ms where it does not (97-110 fps for 5 to 8 windows in a row);
-  translating 2.1-3.6 ms. Seven frames of 16-30 ms were translation with nothing attributed (no upload, image,
-  pipeline or shader time). Lua's longest step 6-15 ms per 30 s. Next: per-pass GPU time at 2x in one of the
-  97-110 fps places (NX_GPU_PROF=1 or an RGP capture), and a fractional render scale (2x renders 3840x2160 for a
-  1440p window; "To do" GPU 5).
-- **Where the 2x frame's GPU time goes** (user sessions with NX_GPU_PROF, `run-session-1112e.log` by pass,
-  `-1112f.log` by shader; 7.9-8.4 ms a frame in a 100 fps place):
-  - 1.3-1.5 ms: one draw, the deferred lighting triangle (vs `5250e040fae92a2c` fs `fd87a85cf5d0fd96`, 3840x2160;
-    236 us at 1x). Its translation is 2,395 lines (`build/shaders_look/`): G-buffer texelFetches through `rs_c2`,
-    each with the integer / float texture choice made at run time, NaN-safe `nmin` / `nmax` / `sat`, bounds-checked
-    `cbr`.
-  - **1.0-1.15 ms: the skinning draws** (vs `44f2ec77be3a3fd3`, no fragment shader; 137-174 a frame, 6.6 us each
-    where other small draws are 0.4-0.8 us). Each has its own BeginTransformFeedback / End, and 38 passes a frame
-    end on `xfb_hazard` (gpu_draw.c `draw`). This cost does not scale with the render scale (a third of the 1x
-    frame's 3.1 ms). "Skipping skinning: no gain" in "Ruled out" was measured main-bound at 1x.
-    `xfb_hazard` treats a vertex buffer bound without a size as reaching to the end of memory and checks every
-    slot, used or not: likely false hazards. NX_GPU_PROF now logs how the captures are laid out (`gpu prof: xfb
-    draws`: same buffers / binding as the draw before, starting where it ended): not read in the field yet.
-  - 0.63-0.65 ms outside passes (155-162 copies, clears, barriers a frame).
-  - By pass at 3840x2160: lit buffer + depth 1.96 ms (10 passes), `c0:37` 1.66 (46 passes: the skinning chain and
-    others share the label), G-buffer 1.56 (3 passes).
-- **Skinning draws 1.0 -> 0.30 ms a frame** (2026-11-12, user sessions `run-session-1112g..j.log`, NX_GPU_PROF=2).
-  Every skinning draw captures into its own, non-adjacent place of one pool (3 buffers, strides 12 / 4 / 4), so
-  spans cannot be shared. (1) The vertex shader stores its captures itself (translate.py `PC_DECL_XFB`: device
-  addresses in push constants after the 20 common bytes; gpu_draw.c `xfb_begin`, point lists drawn without
-  indices; `NX_XFB_STORE=0` off): 6.6 -> 3.3 us a draw. (2) `xfb_hazard` looks only at the vertex streams the
-  attributes name and the program's stages, and at the captures one by one instead of their hull (`xfb_ranges`):
-  passes ended for it 46 -> 0.5 a frame, 1.8 us a draw, "outside passes" 0.8 -> 0.67 ms. Validation run
-  (`-1112k.log`): only the two known messages (Location-06272, OpEntryPoint-08743). Not confirmed by the user
-  yet: that characters and Pokemon animate as before. The translator changed: `build/shaders/spv/27a75578`.
-  Left there: the game's own barriers between skinning draws (88 a frame end a pass at gpu.c OP_BARRIER).
-- **Crash 2026-11-12 17:32 (a long session, audren frame 188,000; log `build/crash-1112.log`): the hurry was
-  wrong.** `nn::diag` Abort on thread 5b from `main+eb0784`. The code there (`eb071c`-`eb0780`): call the
-  function pointer at `[main+46d3928]` (the full collection), try an allocation again (`bl eb0890`), abort (line
-  0x69) if it still fails. So the 14 callers of the collection are **allocation-failure paths**, and the
-  collection has to be finished when it returns. `h_gc_request` now only counts the requests and leaves them
-  full (rebuilt 2026-11-12, not run); `NX_LUA_GC=3` is the hurry, for experiments. An emergency collection
-  (`luaC_fullgc(emergency 1)`, heap 68.6 MB) came just before the abort.
-  So the 50-70 ms hitches every 4-12 s of the earlier long session are the game running out of room in some
-  heap and collecting to get by, and they will be back in long sessions. Next: which allocator fails and why it
-  is full after a long session (`eb0890`'s heap; `c97840` is the allocation before it; do we leak, or is the
-  heap sized for something we size differently?), or collect ahead of the failure in small steps when that heap
-  runs low. The first minutes of a session never ask (`0 full collections asked`).
-- **Broken text again** (the user, 2026-11-12 17:23): F12 capture `build/frames/frame_23259*` (the frame, and
-  targets `240x135 f63 @12f1c36000`, `1920x1080 f63 @12f6752000`, `30x16 f63 @12f1bd1800`). So "likely fixed
-  2026-11-10" in "Open rendering issues" is wrong. Not looked at yet.
-- The skinning change is user-checked: characters and Pokemon looked right. Old translations
-  deleted: only `build/shaders/spv/27a75578` is left (11 GB -> 1 GB).
-- Still open at 120, 2x: GPU busy 7-9 ms in some areas (GPU-bound there; 1,132 of 1,538 slow frames were GPU
-  wait); translation spikes with no cause in the slow-frame line (~25 a session over 15 ms); presenting 15-25 ms
-  (53 frames); single shader loads of 34-36 ms. NX_PROFILE's report is a ~200 ms hitch every 600 frames.
-- **The lighting draw's translation, 2026-11-13** (fs `fd87a85cf5d0fd96`). **No gain in play:** the draw is still
-  1.435 ms at 2x (user session, `build/run-session-1113a.log`), so the instructions removed below were not its
-  cost (fetches / memory? open). It is the
-  sun, one local light, fog and the half-res buffers' upsample in one pass: no loop over lights. Compiled for the
-  7800 XT offline (`rga.exe -s vk-spv-offline -c gfx1101 --isa ...` from `.tools/rdts`, on the `.spv`; work files
-  `build/shaders_look/lit/`): 4,175 instructions, of which ~1,150 were 20 software integer divisions:
-  `rs_sub()`'s `ivec2(gl_FragCoord.xy) % r`, once per scaled texelFetch (the driver has no integer divide), run
-  only above 1x: the draw cost 5.5-6.4x at 4x the pixels. translate.py now works the sub-pixel offset out once
-  in main (`rs_init`, `rs_s`) from a float quotient: 3,024 instructions (-28%); 1,971 of 8,134 shaders use it.
-  Translations are in `build/shaders/spv/ef98d08b` (`27a75578` is the old set, can go). Tried on top, each ~5%
-  and not taken: no float controls, plain min / max for `nmin` / `nmax`, no integer / float texture choice.
-  Left in it: ~300 scalar mask instructions from the block flags (`b1`..`b63`).
-- **The game's barriers inside a pass wait for the next draw, 2026-11-13** (gpu.c OP_BARRIER, gpu_draw.c
-  `barrier_due`; `NX_BARRIER_SKIP=0` off; not measured in play yet). The pass ends only if that draw samples one
-  of the pass's targets, or a shader of the pass could store to memory or images (captures are checked on every
-  draw anyway, `xfb_hazard`). Aimed at the 64 pass ends a frame after skinning draws (`-1112j.log`). Title boot
-  with validation at 2x: the two known messages; there the pass ends are target changes (71 a frame) and one
-  barrier is kept. To check in play with NX_GPU_PROF: `passes/frame ended at`, the new line `the game's barriers
-  inside passes`, "outside passes" (was 0.67 ms), and that nothing flickers. "Deferring NVN barriers" in "Ruled
-  out" was before the capture fixes, when the captures ended those passes anyway.
-- **User session 2026-11-13** (`build/run-session-1113a.log`, 60 fps, 2x, NX_GPU_PROF=2; "game seemed fine", the
-  lights not asked about one by one): GPU work 7.66 ms a frame (median), the lighting draw 1.43, outside passes
-  0.667: nothing gained. Barriers inside passes are only ~6 a frame now (2-4 end the pass, 3-4 do not): the 64
-  pass ends at OP_BARRIER of `-1112j.log` became pass ends at the target change that follows each barrier
-  (gpu.c OP_RENDER_TARGETS: 10 -> 83 a frame), so the passes are split by the game's target changes, not its
-  barriers. One samples-passed report a frame. 1% low 19-20 ms, worst 24-28 ms per window: probably the Lua
-  collector's longest step (6.1-7.4 ms once a cycle; which gcstate: not logged yet).
-- `ref/PokeZ-ARecomp-Online` cloned on the desktop 2026-11-13 (TheMagnumChad's, shallow); `ref/totk-pc-recomp` is
-  not there.
-- The lifter patches no branch instructions (`bl`): hook the instruction before (`after`) and change the arguments.
-
-### The frame run ahead of the fence wait, per-draw shortcuts, lighting shader (2026-11-13/14, GTX 1650 Ti laptop)
-
-Stand-still benchmark, off / on / on / off: **14.1 ms (70.7 fps) -> 11.2-11.8 ms (85-90 fps)**; GPU busy 9.55 ->
-9.2 ms, idle 4.6 -> 1.2-2.6, guest waits for the GPU 4.4 -> 0.
-First played 2026-11-13 by the user (Ryzen 7 7800X3D, RX 7800 XT, 32 GB): the runtime side alone (before the
-hook was re-lifted in) gave 1% lows "closer to 60 than ever"; with the hook "looks pretty good". No numbers
-measured.
-
-- **Submit ahead** (`NX_SUBMIT_AHEAD=0` off; "To do" GPU 1, without answering SyncWait late). The render thread
-  (`main+ccfe14`) records the frame, joins the job threads (`cd0e0c`), then waits for the last frame's two syncs
-  (`cd0e94`, `cd0eb0`) and only then submits (`cd0edc` -> `cd1a74`). Hook `submit_ahead` at `main+cd0e5c` (gfx.c,
-  patches.txt) hands the same list (`[x28 + [x28+d0] * 0x20 + 0x90]`, begin +8 / end +0x10; nothing if the byte at
-  x28+0x10 is 0) to `nvn_submit_ahead` (nvn.c), which translates and submits it at once; the game's own
-  nvnQueueSubmitCommands of the same handles then returns (compared; a different list is logged `run ahead` and
-  submitted normally). The GPU draws frame N-1 while N is translated. Nothing is read later than before, only
-  earlier, after recording ended.
-- Early flushes (`NX_FLUSH_FIRST`) only when the GPU has nothing queued (`NX_FLUSH_BUSY=1`: always): 11.2 -> 10.95.
-  Skipping the pass-boundary flushes (`NX_FLUSH_DRAWS`) while more than one submission is queued: tried, not
-  measured, removed.
-- **Per-draw shortcuts** (gpu.c `run` bumps `bind_gen[stage]` / `vi_gen` / `dyn_gen`, gpu_desc.c `desc_gen`,
-  gpu_pool.c `bad_gen`): `stage_ubos`, `set_vertex_input` (now also with mirrors), `set_dynamic_state` and
-  `descset_use` return when nothing they read was set since the last draw; `gpu_buffer_ro` keeps 256 answers.
-  Translation 7.2 -> 6.4 ms; the frame did not move (GPU-bound now: this pays on a faster GPU or below 1x scale).
-  Profile before (thread 5c, NX_PROFILE): NVIDIA driver 20.6%, waiting 17%, stage_ubos 7.6%, run 6.2%,
-  gpu_buffer_ro 4.1%.
-- **Lighting draw** (fs `fd87a85cf5d0fd96`, 2.19 of 9.7 ms at 1080p here). Where its time goes, by cutting the
-  shader off at a block (hand-edited GLSL swapped into `spv/<version>/`, `NX_PIPELINE_BINARY=0`, NX_GPU_PROF=2):
-  G-buffer fetches 0.14 ms, to b8 0.28, to b14 0.73, to b50 0.80, to b63 1.13, the last block (b63, 4 fetches of
-  `cb2.d[14][2]` and the final shading) ~1.06. Whole-shader edits: int / float choice dropped -0.33; plain
-  min / max / clamp, unchecked `cbr`, plain float->int -0.26; no float-controls modes +0.07 (keep them).
-  In the translator now (version `52b1ebd2`): `nmin` / `nmax` are GLSL.std.450 NMin / NMax (same NaN behaviour),
-  and the integer-texture choice of a fixed slot is the specialization constant `TEX_INT` (constant 2; its default
-  is the mask of slots tested that way, read by `shader_load` into `texint_slots`; `PipeKey.vs_texint` /
-  `fs_texint`, so pipelines.bins / .list start over). 2.19 -> 1.98 ms. Left: the unchecked / plain-clamp variant
-  (changes NaN results), and what b63 samples.
-- A uniform buffer bound past its pool's end (validation `VkDescriptorBufferInfo-range-00342`, once in three
-  validation runs, 1872 bytes at 18944 of a 20480-byte pool) is clamped and logged (`past its pool`).
-  `vkResetQueryPool-firstQuery-02741` in validation runs is NX_GPU_TIMELINE's pool (also with submit-ahead off).
-- Checks: frame 4501 of the benchmark against the old build: 81 of 2 M pixels differ by more than 8 (the view is
-  a wall and the minimap: a weak test). Validation: only the known messages. **Each machine needs a re-lift
-  (patches.txt) and `translate.py --spv`** (else every shader is translated at start: "COMPILING SHADERS" counts
-  per batch, so it sits at 1/x for minutes).
-- Quick benchmark: bench.ps1's run stopped after N windows, last 4 averaged (not in the repo; ~60 s a run).
-
-### Barriers, pool mirrors, the game's resolution controller (2026-11-14, RX 7800 XT + 7800X3D, stand-still)
-
-Pulled `b7737cc` / `c6b1a85` (laptop) first: 2x 6.19 -> 6.17 ms, 1x ~5.0, nothing in validation: no change
-stand-still (the image work is for loads). Uncommitted at the end of the session (nxrecomp, built here only).
-
-- **Where 2x stands:** 6.0-6.2 ms (160-167 fps), GPU busy 5.7-6.0 of it: GPU-bound. 1x 4.8-5.2 ms, GPU 3.3,
-  CPU-bound. So ~2.5 ms of the GPU frame does not scale with the render scale (shadows, 1080p / 960x540 passes,
-  barriers, small draws) and ~0.85 ms per 1x of pixels. NX_GPU_PROF=2 at 2x (`bench_base2x-prof.log`): lighting
-  draw 0.98 ms, outside passes 0.53, `vs d4ea93c1 / fs d4f2e432` 1,050 draws a frame into an unscaled 1920x1080
-  `c0:97 ds:130` target 0.35, then a long tail. The lighting fs uses 96 VGPRs (rga stats): occupancy is not its
-  limit.
-- **Lazy pass ends** (gpu_draw.c `owed_*`, on by default, `NX_LAZY_BARRIER=0` off). Every pass end was a full
-  ALL_COMMANDS barrier (~105 a frame at 2x). Measured first, timing only: no pass-end barrier at all 6.34 -> 5.98
-  ms (ABBA); no barrier in the main command buffer at all 5.58 (another 0.42 ms: the rest is copies, clears,
-  dispatches, the passes below). Now a pass that wrote only its targets (no shader stores, captures, buffer
-  updates, linear targets) ends without one: the barrier is owed, its targets' ranges kept, and every sampled
-  image gets `read_epoch` = `bar_epoch`. Paid: before any command recorded outside a pass (`cmd()` while
-  `owed_live`), at flush, at the game's barriers outside a pass, at a pass on a target an owed pass drew into or
-  that was sampled since the last barrier, and at a draw that samples an owed target or writes memory. Per frame:
-  ~105-110 skipped, ~36 paid before other commands (mostly the ~20-27 compute dispatches), ~11 at a pass on an
-  owed target, 0 at draws; 5 pass ends keep a full barrier (2 shader stores, 2 captures, 1 buffer update).
-  **Off by default since 2026-11-15** (`NX_LAZY_BARRIER=1` on): the user saw flicker, giant squares like broken
-  shadows and colours appearing at random, in play and in 1x bench runs; sync validation stand-still had shown no
-  hazard, so something it does not see (likely a sampled target reached another way: a view or alias of the shadow
-  map, a texture-pool read, buffer device address) skips the owed barrier. Open.
-  **Result: 6.11 -> 6.00 ms a frame at 2x** (all runs of the day: off 6.00-6.20, on 5.94-6.03; the first pair
-  said 6.15 -> 5.95, the last 6.06 -> 6.01), GPU busy -0.1 to -0.2; 1x 5.18 -> 5.06. Not played.
-  - Checked with **sync validation** (`VK_LAYER_VALIDATE_SYNC=1` with NX_VK_VALIDATION=1; ~26 fps; its messages
-    say "hazard detected", and vk.c logs only 3 per message id): 0 hazards with it, some (copy / blit
-    READ_AFTER_WRITE) with no pass-end barriers. It does not see buffer-device-address accesses: the store scan
-    below is unchecked by it. (`VK_LAYER_ENABLES=...SYNCHRONIZATION...` is the deprecated spelling.)
-  - **Shader stores** (nvn.h `SHC_GSTORE`, gpu_shader.c): `SHC_GLOBAL` is the PhysicalStorageBufferAddresses
-    capability, so readers counted as writers. The SPIR-V scan now marks OpStore / atomics through a
-    PhysicalStorageBuffer pointer, or through a pointer it cannot place (types of variables, access chains,
-    conversions, loads, phis, selects). Pass side writes and the game's barriers inside passes (`barrier_due`)
-    use it. Global *reads* need no owed barrier: targets are their own VkImages, not guest memory.
-  - Tried, no gain: an attachment-to-attachment barrier instead of the full one at a pass on an owed target (6.02
-    vs 6.03: the cost there is the wait, not the flushes); no barriers around compute dispatches (5.99 vs 6.00,
-    timing only).
-  - NX_GPU_PROF also lists barriers a frame by the line that asked (`barriers/frame at`), the lazy counts and why
-    pass ends keep a full barrier.
-- **Pool mirrors on AMD at 2x** (`NX_POOL_MIRROR=1`): 6.19 -> 5.80-5.92 alone, but only ~1% on top of the lazy
-  pass ends (5.88 vs 5.95); at 1x they lose (5.17-5.27 vs 4.80-5.01). Left off on AMD. Two changes to them
-  (on wherever mirrors are, i.e. the laptop: **not run there**): pages the CPU writes in 16 scans in a row (none
-  more than 4 apart) become **hot** (`NX_MIRROR_HOT=<n>`, 0 never): read from host memory, write watch no longer
-  reset, so no fault or copy per frame; pages under a texture are pinned cold (`mirror_pin`: the scan must still
-  see texture rewrites). At 1x here: 5.45 -> 5.04 ms with mirrors on, copy-in 1.8 MB -> 0 a frame, ~880 hot
-  pages. And the GPU-written ranges are a bitmap per page (`Mirror.bad`) instead of a list scanned per lookup.
-- **The game's own dynamic resolution** (found, not used): `main+293dc08` (a twin at `main+1eb0dec`) runs when its
-  mode (`[x0+0x28]`, or `[x0+0x50]` if < 8) is 1-3. It averages the GPU frame time `[[main+475a0a0]+0x130]` (ns)
-  over `[x0+0x5c]` frames against 33.33 ms: at or over `[x0+0x60]` (0.95 in the twin) one level down, under 0.8
-  for `[x0+0x58]` checks one up. Levels (`main+3c5f120` width, `+3c5f138` height): 1/1, 1/0.8, 0.8/0.8,
-  0.8/0.65, 0.65/0.65, 0.5/0.5; it writes `3DBufferWidthScale` / `3DBufferHeightScale` into a parameter store,
-  and `main+d025cc` makes the 3D buffer at the screen size (`[[main+475a0a0]+0x100]`) times them (a real texture
-  of that size). `main+27b47f8` sets the scales by a mode (1: `[a1+12]`, 2: `[a1+16]`, else 1.0);
-  `main+293de7c` sets a level directly. The GPU time comes from two timestamp counters (types 10 and 0, reported
-  from `main+b606bc` / `b6083c`, read with nvnDeviceGetTimestampInNanoseconds at `main+cd1a0c` / `cd1a28`),
-  which we answer with CPU time (~2.4 ms apart), so it never steps down. It cannot render above 1x: only the 3D
-  buffer follows it (UI and post stay 1080p), so it is no replacement for our render scale. Possible use: real
-  GPU times and an 8.3 ms budget, so it lowers the scene only where 2x misses 120. Its in-between levels are not
-  16:9 and our scaler only scales 16:9 targets (`image_candidate`). Not tried; the hook needs a re-lift.
-- Async (the user asked): shaders and pipelines are built off the draw, presents have their own thread, and the
-  frame is submitted ahead of the fence wait. Answering the game's fence waits a frame late ("To do" GPU 1) is
-  not done; at 2x it cannot help (GPU idle ~0.2 ms a frame), at 1x it could (idle 1.4).
-- bench.ps1 at 1x: the title passes before the default A window ends: use `NX_INPUT=300-9000/60:A` (else "no
-  windows after the load").
-- **Why 1080p is ~210 fps and not 250-300 (the user's question, 2026-11-14): nothing is saturated.** At 1x
-  (`bench_base1x-b` / `nl1x-a` / `lz1x-a`, frame 4.6-4.9 ms): main runs 71-77% (~3.5 ms), job workers 5a / 5b
-  ~60% (~2.9), render thread 5c 53-59% (~2.6, of it 2.4 translating), GPU busy 3.3-3.5 with 1.4 idle (0.65-0.85 at
-  a guest submission's start, 0.4-0.5 between its flushes). Perfectly overlapped, the slowest stage (main, ~3.5
-  ms) would give ~285 fps: the other ~1.3 ms is hand-offs (main blocked at the job join `main+b47d18` and on the
-  mutex `main+ccc41c`, translation only after recording, the GPU waiting for translation). **Answered 2026-11-15
-  (next section): the hand-offs are cheap; the frame is main's own code.** **Next session starts
-  here:** a per-frame timeline of when main, 5a, 5b, 5c and the GPU run and wait (the counters are averages), to
-  find the critical path; then the fixes it points to: the guest's fence wait answered a frame late ("To do"
-  GPU 1, hides the GPU idle at 1x), the job join (how many emulated cores the workers may use), translation off
-  the critical path ("To do" GPU 7). The 2x case is the GPU (above) and FSR 2 (below).
-- **AA / upscaling plan (the user, 2026-11-14: "TAA and FSR are the way to go"):** 2x is supersampling AA (Violet
-  has none); FSR 2 native AA or ~1440p -> 4K is the bigger GPU win (estimate ~4.5 ms vs 5.6-9 at 2x).
-  `ref/PokeZ-ARecomp-Online` (same Trinity engine family, not Unity) does FSR 2 / 3 / DLAA (`runtime/nvn/vulkan/
-  exec.c` ~3683 and ~9900, `fsr2.cpp`, `dlaa.c`): camera motion vectors from depth and this and last frame's
-  view-projection (picked from the draws' uniforms), a reactive mask from stencil, jitter only on passes drawn with
-  the scene depth, the resolve before the HUD. Steps here: a fractional render scale, Violet's camera matrices
-  (NX_TRACE_VCB), motion vectors and jitter, then FSR 2 itself (AMD FidelityFX, MIT: a download, ask first).
-- **FSR 2 work, 2026-11-21** (the user: "even just for the temporal AA"; download approved): AMD FidelityFX FSR
-  2.2.1 in `deps/FidelityFX-FSR2` (tag v2.2.1, MIT). Its Vulkan backend normally builds shader permutations with
-  the bundled FidelityFX_SC.exe; plan: one permutation per pass compiled with our glslang instead (as Z-A's
-  fsr2_shaders.cpp does), no downloaded executables run. **Frame map** (`bench_fsrmap`, frame 12000, 1x, 376
-  draws; `NX_TRACE=12000 NX_DUMP=12000 NX_TRACE_VCB=...`): 128 XFB skinning draws (`@12fb5aa000`), a 1024^2 shadow
-  map (52), **the G-buffer: 102 draws, colour in slots 1-4** (`@12f80a2000`, `12f7832000`, `12f6fc2000`,
-  `12f6752000`; rt0 unbound: the trace's "rt0 0x0") **and depth f53 1920x1080**; quarter-size passes (AO / SSR?),
-  the lighting triangle (`vs 5250e040`, `fs fd87a85c`) into `@12f5ee2000` (RGBA16F, depth bound) and 31
-  transparent draws there with the depth; a bloom / luminance chain to 7x4 and back; `@12f9a02000` (fs acbcac);
-  **the tone-map, `fs 4b80c6ba33bcbb5b`, into the shown image `@12f9182000` (f56)**; **the HUD, 20 draws** (vc3 an
-  orthographic 1/960, 1/540); a last copy (`fs 2ef346`) into `@12fad3a000`. **Camera:** vertex c[5] rows 0-3 are
-  the view-projection by columns (row 3 = translation 0 -10.2 0.32 -4.9; x / y scale 1.778 = 16:9; w depends on
-  the position), the same in every draw of the frame. So: jitter the passes drawn with the f53 scene depth (the
-  G-buffer and the transparents), motion vectors from that depth and this / last frame's c[5], FSR 2 after the
-  tone-map draw and before the HUD (native AA first: everything at one size). Frame generation (asked): FSR 3's
-  takes the same inputs plus the HUD-free image (available here), but camera-only motion vectors would make moving
-  creatures ghost; per-object vectors (last frame's transforms, skinned ones too) would be their own project.
-- **Built 2026-11-21: FSR 2 native AA, `NX_TAA=1`** (off by default until played). nxrecomp: `tools/fsr2/
-  fsr2_shaders.py` (each pass in 8 variants: depth inverted, sharpening, reprojection Lanczos table or computed (the
-  backend asks for the table on wave64 AMD); glslangValidator + spirv-cross --reflect from the Vulkan SDK make the
-  SPIR-V and the resource tables AMD's tool would), `nx_fsr2` (AMD's sources; `runtime/fsr2_vk_shim.h` forced in:
-  our Vulkan functions are pointers with Vulkan's names), `runtime/fsr2.cpp` (context, Halton jitter, dispatch;
-  inputs moved to SHADER_READ_ONLY for it), `runtime/gpu_taa.c` (camera from the first G-buffer draw, viewport
-  jitter on draws with the scene depth but not full-screen triangles, after the tone-map draw: motion vectors
-  (`shaders/taa_mv.comp`, one reprojection matrix: last VP x inverse VP, so the reversed-Z sky needs no
-  division), FSR 2 into an RGBA16F image, blit back, then the HUD). game.json `"taa": {"resolve_fs":
-  "4b80c6ba33bcbb5b", "camera_cb": 5}`. Camera: near 0.32 (reversed, infinite), vertical FOV 46 deg. First test
-  (`bench_taa2`, 1x, still): resolves, edges smooth in the dump, no validation or FSR errors; 2.03 -> 2.22 ms a
-  frame (GPU busy +0.25 ms at 1080p). (The first run failed: no Lanczos-table variants, `bench_taa1`.) Open: the
-  user's look in play (camera pans: motion vectors and jitter sign; walking creatures: ghosting), then 1.33x
-  upscaling (render 75% per axis: needs a fractional render scale), the reactive mask.
-- Menu (2026-11-22): Options > Video > Anti-aliasing Off / FSR 2 (native) and Sharpening 0-1, settings.ini `taa` /
-  `taa_sharpness`, taken at the next frame (history reset; the first frame after switching on is unjittered); NX_TAA /
-  NX_TAA_SHARPNESS still decide at start when set. UiHost version 4. Upscaling presets become more entries in the
-  same list once the render size can be a fraction of the output.
-- Played 2026-11-23 (the user, 2x, uncapped): first build flickered on sharp edges and distant shadows; the title
-  screen (still camera) did not (frames 4000-4003 identical, FSR on or off). Fix: the reprojection matrix (last VP x
-  inverse of this VP) is now made in double; in float the camera translation far from the origin left it off by a
-  fraction of a pixel, differently each frame while the camera moved. After: "looks good", what is left is the
-  game's own low-resolution shadows (1024 cascades; NOTES "2K shadows": opening the map crashed). Log line every
-  600 frames (`taa: last 600 frames`): in the overworld 600 resolved, 0 reset, ~750 jittered draws, 3 full-screen,
-  ~1150 other a frame. Development menu: Jitter (dev) on / off, live.
-- Long term (asked about 2026-11-14): a Unity rewrite is no shortcut (all ~52 MB of main and the Lua by hand, and
-  nothing derived could be shared). Mobile is closer through nxrecomp: the lifted C is ARM64-native, Android has
-  Vulkan, the OS layer (Win32 threads, write watch, files, SDL) would need a Linux / Android side (the Z-A port
-  runs on Linux and macOS).
-- Next, from what is measured: the ~2.5 ms of GPU work that does not scale (shadows, unscaled passes, the 1,050
-  small draws); the controller above for a steady 120; a fractional render scale for 1440p windows ("To do" GPU
-  5: 2x renders 2.25x the window's pixels).
-
-### The frame's timeline (NX_TRACE, 2026-11-15, RX 7800 XT + 7800X3D, 1x, stand-still)
-
-- **Tool:** `NX_TRACE=<first frame>[,<frames>]` (runtime/trace.c, default 20 frames) writes
-  `build	race-<frame>.json` (Chrome trace: ui.perfetto.dev) a few frames after the last: each guest thread's state
-  (running on its emulated core, with the host thread's share of CPU from QueryThreadCycleTime / TSC; waiting for a
-  core; blocked by kind, with 6 guest callers, the thread that ended the wait and the us from that to running), the
-  runtime's work on that thread (translate + submit, vkQueueSubmit calls, present, GPU and slot waits), GPU
-  submissions on the CPU clock (turns NX_GPU_TIMELINE's timestamps on), present markers.
-  `py -3.12 nxrecomp	ools	race_summary.py <json> [thread names]` prints it per frame and the block sites.
-  Bench: `bench.ps1 <name> NX_RES_SCALE=1 'NX_INPUT=300-9000/60:A' NX_TRACE=15000,30` (frame 15000 is well after the
-  load). Runs `trace1x-a/-b/-c`; ~10k events per 20 frames, nothing dropped, no visible cost outside the frames.
-- **Result (trace1x-c, frames 15000-15020, mean 5.04 ms):** main runs 3.51 ms a frame (3.39 of it on a host CPU:
-  ~97%, so Windows takes nothing from it) and is blocked 1.39: **the frame is main's loop**. Of main's blocks: the
-  job join `main+b47d18 < b47594 < 2b7aaf8` 0.69-0.89 ms (12-13 waits a frame, ended by 5a / 5b), the mutexes at
-  `main+ccc41c` (four callers `cce2e4` / `ccdfc4` from `2a78768` / `2a78798`) ~0.27 together (~13 waits), the
-  LightEvent at `main+98ce24 < 29b368c` 0.07. **A wake costs ~5 us** (wake -> running on the host), so ~13 hand-offs
-  are ~0.07 ms: the waits are real work on the other side (the workers' jobs), not our scheduler.
-  Workers 5a / 5b (cores 1 / 2): run 2.8-3.0, ~97% on CPU, blocked 1.8-2.0 waiting for jobs (`main+b47d18 <
-  130412c`). Render thread 5c (core 0 with main, mask 1): blocked ~2.2 at `main+b85d28 < 130412c` (the frame's
-  hand-over, ended by 5a / 5b), runs 0.4 of guest code, translates 2.3-2.4 without a core, waits for core 0 0.1-0.7
-  a frame (up to 2.4 in a slow stretch of trace1x-b, while main ran 5-6.6 ms frames). GPU busy 4.0, idle 1.0; no
-  guest waits for the GPU at all (submit-ahead), so answering the fence late cannot help at 1x.
-- **What it rules out:** the three fixes planned from the averages (fence wait a frame late, more cores for the
-  job join, translation off the critical path) do not touch the 1x critical path: main never waits on the GPU or the
-  translation, and the join waits are the workers' own run time. Frame-to-frame variance (4.2-6.1 ms) follows
-  main's run time (3.0-4.5), with ~97% on CPU throughout: the game's work varies, not the host.
-- **So at 1x the lever is lifted-code speed** (main's 3.4 ms and the workers' ~2.9): the "CPU / lifter" list below
-  (fewer SAVEC stores, preserve_none, PGO, leaf inlining). At 2x the GPU stays the limit (lazy pass ends are off
-  again, so ~6.1 ms).
-- **Lazy pass ends broke rendering in play** (2026-11-15, the user: flicker, giant squares like broken shadows,
-  colours appearing at random, also in the 1x bench runs); off by default now, `NX_LAZY_BARRIER=1` on. Not found
-  yet which read the owed barrier misses; sync validation stand-still saw no hazard.
-
-### Lifted vs hand-written C++ for hot functions (2026-11-15)
-
-- **Hot list** (`bench_prof1x-a`, NX_PROFILE=main,5a,5b at 1x): flat. Top innermost functions, % of all samples
-  (lifted code is ~54%): `b43858` 1.3, `bf44f4` 1.1, `b479f4` 1.0, `2b815e8` 0.8, `41998` 0.8 (a Lua opcode handler:
-  tail jump through `qword_4383398[op & 0x7f]`), `2c4b0`, `c3d4e8`, `2ce69c0`, `b44204`, `2a55910`. Nothing to win
-  by rewriting one function.
-- **Setup** (`build/handport/`, game-derived, stays there): `lifted_<off>.c` = the function out of `build/lifted`
-  compiled alone with the lifted flags at -O1 (as built) and -O3; `hand_<off>.cpp` = typed C++ from the Hex-Rays
-  output (same calls and memory effects, host pointers) at -O3; `build.bat <off>` compiles and disassembles,
-  `count.py` counts instructions / loads / stores / calls.
-- **`b43858`** (a 60-slot frame scheduler: walks its task list, virtual and pointer-to-member calls, vector erase):
-  lifted 673 instructions (-O3: 688), 152 loads, 246 stores, 16 calls; hand 201, 36, 18, 10. **202 of the 246
-  stores and 38 loads are the Ctx** (SAVEC / LOADC around each call: ~17 stores, x19-x28 included), 36 more loads
-  are host-stack reloads (19 live guest registers). Its real memory writes: ~30 (~15 to the guest stack).
-- **`bf44f4`** (a Pokémon record's field read: owner lock by LDAXR / STXR, decrypt the 0x140 bytes with the LCG
-  1103515245 / 24691 XOR stream, checksum, field by the PID's block order `byte_3C62E18`, encrypt again): lifted 414
-  vs hand 259 instructions, but **the crypt and checksum loops are at parity** (12 instructions a step lifted, ~9
-  in the 2x-unrolled SIMD -O3 version: no faster). The difference is fixed per call: entry loads of every used
-  register from Ctx (ymm loads for x8-x15), SAVEC / LOADC around the 4 calls, and the exclusive monitor (stores of
-  address / size / value to Ctx + 0x330-0x340 around each LDAXR, then `lock cmpxchg`; native: one `lock cmpxchg`).
-- **So the lifter's cost is per call, not per instruction:** straight-line code and loops compile as native;
-  calls, entries and exclusives pay. -O3 does not help (the Ctx stores must happen: callees read Ctx). Matches the
-  sampled split (entry 3.8%, bl 9.0%, blr 5.2%, ret 2.3%, exclusives 4.7% of lifted samples). The fixes are the
-  "CPU / lifter" items 1 (SAVEC without x19-x28 where safe), 2 (preserve_none register arguments) and 4 (fused
-  LDAXR / op / STLXR); `handport` recounts a function after a lifter change without a game run.
-
-### x19-x28 left out of call-site stores (lifter, 2026-11-15)
-
-"CPU / lifter" item 1, built and run (smoke-tested, A/B'd 2026-11-16: ~0-3% at 1x, within noise; not played).
-- **What changed** (a64lift.py `csr_flow` / `csr_needs`, a64rt.h `SAVE_FOR`, dispatch.c): before a BL / BLR the
-  lifted code stored every register it wrote to the Ctx (SAVEC); now it leaves x19-x28 out (SAVECN) unless the
-  callee reads them from its caller. Per entry, a must-written and a must-spilled dataflow over the function finds
-  the x19-x28 it reads before writing them on some path from that entry; reads after the register was spilled on
-  every path (prologue STP / STR to the stack) do not count; calls and tail jumps pass the callee's needs on (a
-  fixpoint over all modules). funcs.h gets `#define CSR_f_<addr> ~, 1,` for the entries that need them; `SAVE_FOR`
-  picks SAVEC / SAVECN at compile time. BLR: the flat function table carries the flag in bit 0; a flagged target
-  gets SAVEC and is logged once (`dispatch: BLR to ...`). Returns keep SAVEC (below). Result: 3,935 of 219,877
-  entries need them (Lua opcode handlers, luaV_execute's re-entries, IDA-split chunks, jump-table cases, start-up).
-- **What the analysis had to learn** (each found by a crash or a count): a register spilled on every path is never
-  the caller's (else correlated branches flag everything: main+b43b2c); per path, not per function (luaV_execute
-  main+41150 spills all, its re-entries main+411a0 / 411a4 read x21 / x24 / x25 straight from the Ctx); per entry
-  (else callers of luaV_execute's main entry inherit the re-entries' needs: 70,490 entries); needs pass through
-  functions that spill (the Lua VM keeps its state in x19-x28 across its own calls: main+26c60 -> 27da0 -> 41150);
-  libunwind's `unw_getcontext` (sdk+55fc30: stores all ten, uses none) is a capture, not a use (else every caller
-  of __cxa_throw: 25,000); setjmp passes nothing on; hook sites read only registers their function wrote.
-- **Returns must keep storing x19-x28.** A function has locals only for the registers it uses; for the others the
-  Ctx slot is the live value. A callee that used x23 and returned without writing it back left its own value
-  there, and a caller that never touches x23 then tail-jumped into a Lua handler reading it (the first build
-  crashed in luaV_execute on a CallInfo holding a handler address). With SAVEC at returns the callee also writes
-  back whatever stale values a SAVECN call left it, into slots its caller does not read.
-- **Debug lifts:** `NX_CSR_POISON=1` stores 0xdead..NN in the slots a call leaves out (a reader crashes at once on
-  0xdead...<reg>; the build ran a whole bench, 4 BLR notes: main+2059df4, f58da0, f59938, 732990, all handled);
-  `NX_CSR_KEEP=bl,blr` stores them fully at those sites (bisecting); `NX_CSR_DEBUG=1` prints each use and how far
-  each root's need spreads.
-- **Numbers so far:** handport `b43858` stores 246 -> 224 static (its 6 BLRs now carry a cold SAVEC copy and a
-  note call: 673 -> 713 instructions static, fewer executed); `bf44f4` 102 -> 84 stores. Two 1x benches 4.75 /
-  4.80 ms vs ~5.0 earlier in the day, but the day's runs are not comparable: the user had HEVC video playing for
-  some (DWM drops the game's frame rate even with decoding on the other GPU). An A/B (old lifter vs new, -O1 and
-  -O3 lifted code) with the video paused is next. Lifting now takes ~2 min on the desktop (2 processes).
-- **A/B (2026-11-16, desktop, video stopped, 1x stand-still, `bench_csr_<exe><n>`, order new base o3 o3 base new):**
-  `build/ab/base.exe` (lifter before 3fd1c21, -O1) 5.058 / 4.856 ms, avg 4.957 (201.7 fps); `new.exe` (3fd1c21,
-  -O1) 4.755 / 4.844, avg 4.800 (208.3); `o3.exe` (3fd1c21, `NX_LIFT_OPT=-O3`) 4.775 / 4.680, avg 4.728 (211.5).
-  Window medians: base 5.07 / 4.83, new 4.73 / 4.79, o3 4.71 / 4.63. No validation lines. Read: new vs base's 3%
-  is mostly base1, an outlier whose GPU busy was also high (3.44 vs 3.16-3.31: the GPU's work doesn't depend on the
-  exe, so that run drifted); the second pair is level (4.844 vs 4.856). So x19-x28 alone is at most a few % at 1x.
-  -O3 is ~1.5% over -O1 and best in both its runs (exe 315 vs 324 MB; base 353; build 4.4 vs 4.0 min), against
-  the handport reading that -O3 doesn't help single functions. The other stores around a call are still all there:
-  x0-x18 written in the function and every written V register (128-bit each) go to the Ctx before each BL / BLR
-  (a64lift.py `savecn`); csr_flow could leave out x9-x18 and v8-v31 that the callee doesn't read the same way.
-  bench.ps1 now waits for the killed game to exit (the next exe copy found it locked).
-
-### x0-x17 stored only when written since the last call, reloaded only when read (lifter, 2026-11-16/17)
-
-- **What changed** (a64lift.py `call_masks`, `fn_cfg`; emit's `SAVEX(mask)` / `LOADX(mask)`, `SAVET`): per call
-  site the static count was ~10.3 Ctx stores and ~7.7 reloads (x0-x8 4.6 / 4.8, x9-x17 2.35 / 2.35, x29-x31 2.7
-  stores, V registers ~6%). Now, per function: a may-set forward of x0-x17 written since the last call (emptied at
-  every call), stored at calls (BL, BLR) and exits (RET, tail jumps, BR); and liveness backward, a call defining all
-  of x0-x17, every store reading its local, a full SAVE (svc, host code, hooks, traps) reading them all: only the
-  live ones are reloaded after a call. Exact, no calling-convention assumption: a slot not stored still holds the
-  value (the entry's, or the last callee's), a local not reloaded is never read or stored again. x18, x19-x28
-  (SAVE_FOR as before), x29-x30, SP, V registers, flags unchanged. `NX_CSR_KEEP=x` lifts the old full stores and
-  reloads; `NX_CSR_POISON=1` also puts 0xdeadbeef000000NN in the locals a call leaves stale.
-- **Two wrong turns:** (1) skipping x9-x17 at a BL when the callee does not read them (csr_flow widened to
-  x9-x17: 17,444 entries did) crashed at boot (`bench_tmp_x17*`, sdk / main+30cfc3c); (2) the poison lift showed
-  why: the written-since set is a may-set, so at a join where one path wrote x0 after a call and the other left
-  the local stale (not reloaded), the exit stored the stale one (Ctx x0 = 0xdeadbeef00000000 in
-  sdk+46c300). Fixed by counting stores as reads in the liveness; that also stores skipped x9-x17 at the next call
-  anyway (outlined functions may pass them through a call that does not touch them), so the skip was dropped.
-  The poison lift then ran boot to title 90 s clean (`smoke_poison.log`).
-- **Static:** handport `bf44f4` 416 -> 347 instructions, 106 -> 92 loads, 75 -> 58 stores (-O3); `b43858` 722 ->
-  688 (its stores are mostly host stack and x29 / x30 / SP). Exe 315 -> 282 MB.
-- **A/B** (2026-11-17, desktop, 1x stand-still, `bench_ex_*`, ex o3 o3 ex): `build/ab/o3.exe` 4.777 / 4.680 ms
-  (avg 4.729, 211.5 fps), `ex.exe` 4.448 / 4.390 (avg 4.419, **226.3 fps, -6.6%**); medians 4.76 / 4.65 vs 4.40 /
-  4.37; GPU busy 3.27 / 3.22 vs 3.01 / 3.07. Both ex runs are below every o3 run (also the 4.64 / 4.56 of
-  `bench_tmp_o3*`). Caveat: ex.exe also has the runtime at -O3 (o3.exe: -O2); its share not measured. Not played.
-- **Build memory** (the session's lift was stopped for low memory): the lift's workers took all but 4 GB of what
-  was free (8 workers on ~28 GB), and 15 compiles at -O3 paged (build 4.4 -> 10.3 min). Now the lift leaves 8 GB,
-  and lifted code above -O1 gets 3 GB per compile job (10 here; build 5.3 min).
-
-### preserve_none / sysv_abi on lifted functions (plan a, 2026-11-17/20: sysv the default)
-
-- **Static check** (clang-cl 19.1.5, -O3, the build's lifted flags, copies in a scratch dir): the attribute alone
-  on every lifted function, GuestFn, call_ind / jump_ind / jump_ind_fast. main_175.c (holds `bf44f4`) 72,903 ->
-  76,453 instructions (+4.9%), pushes 784 -> 104, spills / reloads 990 / 9,851 -> 2,007 / 14,507; main_000.c
-  +0.6%; `bf44f4` 386 -> 401 (8 pushes -> 1, 0 -> 8 spills, 25 reloads). Why: x19-x28 locals live across calls
-  sit in host callee-saved registers (calls don't reload them, SAVE_FOR); with none, clang spills them around every
-  call site instead of pushing once per function. The notes' 3-10% assumed the register-argument design (x0-x8 in
-  registers, "Lifter and build"), not the attribute alone.
-- `sysv_abi` (rbx, rbp, r12-r15 kept; rsi / rdi and all xmm caller-saved: no xmm6-15 saves, 276 of them in
-  main_000.s): main_175 -0.1%, main_000 -0.6%, `bf44f4` 401. Neither wins on paper; the A/B decides (call
-  frequencies are not in a static count).
-- **What is built:** a64rt.h `NXCC` on GuestFn, call_ind, jump_ind, jump_ind_fast; a64lift.py writes it on every
-  f_ / b_ definition, funcs.h declaration and stub. The choice is per game: game.json `"lift_cc"` (win64 | sysv |
-  preserve_none; absent: win64, so MK8 is unchanged and needs no re-lift), or the cache variable `NX_LIFT_CC` to
-  compare (nxrecomp.cmake: `NX_CC_DEFS` on lifted, a64rt and the exes). Host functions stored as a GuestFn are
-  `NXCC` (nvn.c's 369 procs incl. the TEX_GET / MS_SET macros, dispatch.c, movie.c, main.c h_rtld_*, loader.c
-  h_lookup_global_auto): a missing one is a compile error (clang: incompatible function pointer types). The 10
-  shared overrides.txt functions are declared `NXCC` in hos.h, so a definition without it no longer compiles
-  either (lifted code calls them by name). patches.txt hooks stay Win64 (`extern void h_x(Ctx *)` at the site).
-  Preemption only suspends and reads a thread's context (kernel.c), so the convention does not matter there.
-- **A/B** (2026-11-20, desktop, 1x stand-still, video paused, `bench_cc_*`, order w64 pn sysv sysv pn w64; one
-  re-lift for all three, `build/ab/w64.exe` / `pn.exe` / `sysv.exe`, trees `build/cmake`, `cmake_pn`,
-  `cmake_sysv`): means win64 4.259 / 4.110 (4.185), preserve_none 4.205 / 4.151 (4.178), **sysv 3.999 / 4.103
-  (4.051, -3.2%)**; window medians 4.25 / 4.09, 4.22 / 4.145, 3.98 / 4.08. Exes 282, 311 (+10%), 286 MB. No
-  crashes, no validation lines. Read: preserve_none even (its spills at call sites cancel the pushes it saves),
-  sysv a small gain (no xmm6-15 saves), at the edge of the noise (sysv2 vs w642 level), but best in both pairs.
-  The day ran faster than 2026-11-17 for the same exe (w64 = ex.exe: 4.19 vs 4.42): compare within a day only.
-  **sysv is Violet's default** (game.json); preserve_none dropped.
-
-### x29 left out of call-site stores, fused exclusive loops, guest cores on host cores (plan b-d, 2026-11-20/21)
-
-- **b, x29 like x19-x28** (a64lift.py `CSR` = x19-x29, `CALLEE_SAVED_X`): a BL stores x29 only if csr_flow finds the
-  callee reads its caller's value (a prologue spills it: STP x29, x30 counts as a spill). 3,935 -> 3,963 needy
-  entries. The cost: frame records now hold stale caller x29 values past the first frame or two, so frame-pointer
-  walks (NX_TRACE / waitprof guest callers in kernel.c, which are bounds-checked; crash dumps; wild.c's log chain)
-  see less. Debug lift `NX_CSR_KEEP=fp` stores x29 as before. Host hooks reading c->x[29] (lua.c h_script_error)
-  run after SAVE in a function that wrote x29 itself.
-- **c, fused exclusives** (a64lift.py `excl_fusions` / `excl_stmt`; `NX_EXCL_FUSE=0` lifts them one by one):
-  `L: LD(A)XR; <data processing, branches out>; ST(L)XR Ws; CBNZ Ws, L` as one block that never touches the Ctx
-  monitor: no ops between = `__atomic_exchange_n` (18,822), one ADD(S) / SUB(S) of Rt into Rv = `__atomic_fetch_add /
-  _sub`, then the instruction itself for its result and flags (32,240; 32/64-bit), anything else a CAS loop around
-  the instructions between (65,156; 16-bit decrements, lock tries with a branch out, compare-and-swap). Survey of
-  the modules: 130,297 exclusive loads, ~100k branch-free loops. Kept out: branches into the sequence (except to
-  L), Xn written in it, patches.txt hooks, Rt = Rn, LDXP / STXP.
-- **A/B** (2026-11-20 evening, desktop, 1x, video paused, `bench_bc_*`, order sysv b bc bc b sysv; exes 286 / 276 /
-  268 MB): sysv base 4.466 / 4.411 (4.44 ms), **b 4.340 / 4.345 (4.34, -2.2%)**, b+c 4.267 (one run, -1.7% over b).
-  **The other b+c run crashed** (`bench_bc_bc1`, after ~7,200 frames in the field, on main): access violation
-  reading 0 at main+b5ab44 in f_7100b5aa9c, a list walk (x21 = [x8 + 0x10]) next to a 16-bit refcount decrement
-  at +0x1a (now a CAS loop); f_7102074494 returned [obj + 0x58] + index * 8 with both 0, i.e. an object whose array
-  is not set (half built or being torn down). Not seen before in any log. Checked after: a poison lift (b + c,
-  `NX_CSR_POISON=1`: 0xdead..1d in every x29 slot a call leaves out) ran clean (`bench_cx_poison1`), and three
-  more b+c runs ran clean (`bench_cx_bc1-3`, 4.30 / 4.33 / 4.36 ms, but GPU busy 3.2-3.35 vs ~3.05 earlier:
-  not comparable). So 1 crash in 5 b+c runs, 0 in 2 b runs; whether c causes it is open (re-read of the fusion
-  found no hole). The build in `build/cmake` is b+c (sysv).
-- **d, guest cores on host cores** (kernel.c `host_cores_init` / `host_core_follow`, `NX_HOST_CORES=1`; off by
-  default): each of the 3 guest cores gets one physical core (both SMT siblings as a CPU set; the fastest
-  EfficiencyClass; not the core of logical processor 0 when there are enough), applied with
-  SetThreadSelectedCpuSets when the core a thread holds changes (core_assign, core_move), not per hand-off. The
-  runtime's own threads stay anywhere. **A/B 2026-11-21** (desktop, 1x, the b+c exe, `bench_hc_*`, off on on
-  off): off 4.344 / 4.210 ms, **on 4.833 / 4.984 (+14%)**, 1% lows 7.5 / 8.0 -> 10.0 / 11.2 ms; it chose physical
-  cores 2, 4, 6 (2 logical processors each). Ruled out: a core holder pinned to one physical core waits for it
-  while Windows would have run it elsewhere (the runtime's own threads, the driver's, DWM share those cores).
-  Left in, off by default.
-- **b's hole, found 2026-11-21:** the PGO play session crashed at the end in lua.c `h_gc_fullgc` (reading 8):
-  that hook sits on luaC_fullgc's first instruction and reads the caller's x29 (`[x29 + 8]`, the log line's
-  "called from"); the caller no longer stored x29, so the slot held a stale 0. csr_flow had assumed hooks read
-  only registers their function wrote. Now a hook site counts as reading x29 if its function has not written it
-  on every path by then (the callers of entry hooks store it again). Counting all of x19-x29 there made 20,063
-  entries needy instead of 3,963 (needs pass up through callers); the x19-x28 rule stands (each hook reads only
-  what its function wrote, listed in csr_flow). Benches never hit it (no full collection in a stand-still run),
-  nor did the poison run.
-
-### PGO (plan e, 2026-11-21)
-
-- **Build switch** (nxrecomp.cmake): `NX_PGO=gen` compiles lifted code, a64rt and the exe with
-  `-fprofile-instr-generate` and links clang's `clang_rt.profile-x86_64.lib` (found next to clang-cl); the runtime
-  (main.c `pgo_init`) writes `pgo-<pid>.profraw` next to the exe every 30 s and at exit (`NX_PGO_RAW`: another
-  folder). `llvm-profdata merge -o x.profdata *.profraw` (next to clang-cl), then `NX_PGO=use
-  NX_PGO_PROFILE=x.profdata`; every source depends on the profile file, so a new one rebuilds. A profile fits one
-  lift (clang matches functions by a hash of their control flow; changed ones lose their counts).
-- **First profile:** `build/cmake_pgo` (gen, 744 MB exe), the user's ~25 min of play on the b+c lift: 57-63 fps
-  at 1x-ish in the field (front-end instrumentation counts every inlined LD64 / ST64: the hottest counters are
-  those, summed per file). Raw 6.1 GB, merged `build/pgo/violet.profdata` 277 MB, 278,750 functions. IR-level
-  instrumentation (`-fprofile-generate`, counters after inlining) would make the instrumented exe much faster to
-  play; not tried.
-- **A/B** (2026-11-21, desktop, 1x, `bench_pgo_*`, plain pgo pgo plain; the lift with the x29 hook fix: 3,966
-  needy entries; `build/cmake` plain 268 MB, `build/cmake_pgo` with the profile 260 MB): **pgo 1.967 / 1.977 ms,
-  plain 2.052 (-3.8%)**, 1% lows 4.55 / 4.43 vs 4.74, GPU busy 1.73 in all. plain1 is out: 2.03 ms for 13 windows,
-  then ~4.05 to the end (GPU busy 3.28; the A presses to frame 9000 likely started something at the new spot).
-  **The bench scene moved:** bench.ps1 starts from `build/save`, and the profiling session saved elsewhere: ~2.0
-  ms a frame now (GPU busy 1.73 of it) against ~4.3 at the old spot, so no comparison with earlier days, and CPU
-  gains show less here. Not the default: `build/cmake` stays plain; a re-lift wants a new profile.
+- Lifter: x0-x17 stored only when written / reloaded only when read (1x -6.6%); x19-x28 and x29 only for callees that
+  read them (a few %, -2.2%); -O3 (~1.5%); sysv convention (-3.2%); fused exclusives (-1.7%, one crash in 5 runs,
+  below); PGO opt-in (-3.8%); AAPCS calls without flags (4.41 -> 3.99 ms CPU-only, early).
+- Frame pacing / stalls (2026-11-12, 2x 120 now steady where the GPU allows): Lua collector switched to incremental
+  and stepped over the debt (`lua.c`, `NX_LUA_GC=0` off; was a 40-150 ms stall every 45-75 s; the switch must clear
+  `lastatomic`); presents held to the frame's tick (`hold_present`, 7% -> 1% late frames); kernel `core_move` (saves
+  no longer a 100 ms frame); shaders preloaded; host imports freed on their own thread.
+- GPU: skinning draws store their own captures (`NX_XFB_STORE`) and `xfb_hazard` checks only used streams (1.0 ->
+  0.3 ms a frame at 2x); the game's barriers inside a pass wait for the next draw (`barrier_due`); lighting shader
+  2.19 -> 1.98 ms (laptop); frame submitted before the render thread's fence wait (`h_submit_ahead`, laptop 70.7 ->
+  85-90 fps); per-draw shortcuts by generation counters (translation 7.2 -> 6.4 ms); early flushes only when the GPU
+  is idle; narrower pass-end barriers; flushes every 250 draws; presents on their own thread; pool mirrors with hot
+  pages (laptop).
+- FSR 2 native AA, 2K shadows (Graphics).
 
 ### Ruled out (measured, no gain)
 
-Deferring NVN barriers; skipping skinning `vs 44f2ec77`; no barrier at pass ends (also corrupts lighting); CPU_NO_ACCESS
-pools in VRAM; staging in ReBAR VRAM; stable clocks (-13%); NX_FLUSH_DRAWS=60; colour compression / format lists (no
-DCC decompress in RGP); shader-quality changes above; kspin on the laptop; attachment-only barriers between
-passes on one target and dropping the barriers around compute dispatches (both 2026-11-14); preserve_none on lifted code (even, +10% code) and guest cores pinned to physical cores
-(`NX_HOST_CORES`, +14%), both 2026-11-20/21.
+Deferring NVN barriers wholesale; skipping skinning at 1x (main-bound); no barrier at pass ends (corrupts lighting);
+CPU_NO_ACCESS pools in VRAM; staging in ReBAR VRAM; stable clocks (-13%); NX_FLUSH_DRAWS=60; colour compression /
+format lists; attachment-only barriers between passes on one target; dropping barriers around compute dispatches;
+kspin; preserve_none (even, +10% code); guest cores pinned to physical cores (`NX_HOST_CORES=1`, +14%: the runtime's
+and driver's threads share them); answering the fence late at 1x and more cores for the job join (the trace: main
+never waits on the GPU, the joins are the workers' real work); rewriting single hot functions by hand (the profile is
+flat: top function 1.3%); the lighting shader's instruction count (-28% instructions, same time).
 
-### What a frame looks like (RGP, stand-still)
+### Open findings
 
-~230 barriers a frame, all FULL stalls (the cost is the stall, not the flushes); no decompress / fast-clear eliminate /
-FMask; ~72 pass splits from NVN barriers + ~21 target changes + ~25 XFB (Eden ends a pass only when the framebuffer
-changes). The frame opens with the XFB skinning chain on `1920x1080 c0:37 @12fad3a000` (vs 44f2ec77be3a3fd3), split
-every 1-5 draws by NVN barriers, draws 5-20 µs never overlapping. Most expensive draw: full-screen triangle on the lit
-scene buffer (`@12f5ee2000`, vs 5250e040fae92a2c fs fd87a85cf5d0fd96, 236 µs); then the G-buffer (`@12f80a2000`, 4
-colour + depth). Pools (Mesagoza): 3,314 CPU_NO_ACCESS (367 MB), one 350 MB CPU_UNCACHED, a 268 MB compressible.
-Render thread profile: AMD driver 18%, run 6.5%, draw 5%, stage_ubos 4%, memmove 3.5%. Twice a run ~60 ms frames with
-main holding its core (~60 s apart): not chased.
+- **Lazy pass-end barriers** (`NX_LAZY_BARRIER=1`, off): 6.11 -> 6.00 ms at 2x, sync validation clean stand-still,
+  but in play flicker, giant squares like broken shadows and colour flashes. Something validation does not see (a
+  view or alias of the shadow map, a texture-pool read, buffer device address) skips the owed barrier.
+- **Fused exclusives crash** (1 in 5 b+c runs, 2026-11-20): access violation reading 0 at `main+b5ab44` in
+  f_7100b5aa9c, a list walk next to a 16-bit refcount decrement (now a CAS loop); f_7102074494 returned [obj + 0x58] +
+  idx * 8 with both 0. A poison run and three more runs were clean; whether fusion causes it is open. Fusion is on.
+- **The game's dynamic resolution** (`main+293dc08`, twin `1eb0dec`): averages the GPU frame time
+  `[[main+475a0a0]+0x130]` against 33.33 ms and steps `3DBufferWidthScale` / `HeightScale` through 1, 0.8, 0.65, 0.5
+  (tables `main+3c5f120` / `3c5f138`); the time comes from timestamp counters we answer with CPU time, so it never
+  steps. Only the 3D buffer follows it; its levels are not 16:9 (our scaler scales 16:9 only). Possible use: real GPU
+  times and an 8.3 ms budget for a steady 120 at 2x.
+- 2x GPU time (NX_GPU_PROF, 100 fps place): lighting draw 1.3-1.5 ms, skinning 0.3, outside passes ~0.65 (copies,
+  clears, barriers), `vs d4ea93c1 / fs d4f2e432` 1,050 draws into an unscaled 1080p target 0.35. RGP: ~230 barriers
+  a frame, all full stalls; no decompress or fast-clear passes.
 
-### To do, ranked (from the Z-A, TotK and ssbu-recomp sweeps; estimates, nothing measured)
+### Next, ranked (estimates unless noted)
 
-First steps (cheap, measurable): time XFB / compute passes and `descset_sync`; count ASTC textures and counter-0
-readers; then overlapped reads, `/GS-`, CRC / TBL lowering, SAVEC trimming, sub-1x scale.
-
-GPU:
-1. **Overlap CPU and GPU** (Z-A exec.c 97-160): answer SyncWait one frame late (5c now waits at `main+cd0eb4` for frame
-   N-1's fence, fenced at `cd1c54` after submitting at `cd1a74`). Up to ~3-4.5 ms on the laptop. Hazards: vertex /
-   index data read in place from guest pools, compute / XFB outputs; Z-A needed uniform copies, storage snapshots,
-   and is off on AMD. Large, high risk.
-2. **Ignore NVN barriers inside passes with no attachment hazard** (Z-A, no CMD_BARRIER; our two feedback cases need
-   copies first; TotK's barrier design equals ours: dedup is cheap).
-3. **XFB skinning into a device-local mirror** (Z-A exec.c 5851-5960; 3 ms on a 1660 Super): skinned vertices go over
-   PCIe now (gpu_draw.c `xfb_begin`). Needs "GPU-written" stamps so `mirror_sync` doesn't clobber, and a copy-back.
-4. **Uploads / texture creation out of the pass** (TotK vk_texture.c 894-1010; gpu_image.c 480, 501, 666, 669, 806
-   end the pass with 2-3 full barriers each): record into `slots[cur].pre`, deswizzle / ASTC on workers, prefetch at
-   nvnTexturePoolRegisterTexture (the 5-9 ms spikes at 2x).
-5. **Render scale below 1x / fractional / dynamic** (Z-A output_scale.c): float scale in push constants.
-6. Skip `set_dynamic_state` / `set_vertex_input` with a generation bumped by every setter (TotK `bind_sig`); cache
-   descriptor lookups; UBOs as UNIFORM_BUFFER_DYNAMIC; push descriptor update templates; `stage_ubos` memo.
-7. A vkCmd* recorder thread (TotK vk_rec.c, -17% on replay; Eden's 32 KB chunks; Savage Wind's async submission
-   `ref/SavageWindRecomp/runtime/nvn/objects.c`). Helps only once translation exceeds the GPU frame.
-8. Graphics pipeline libraries + fast link (TotK vk_pipeline.c 1476-1830; ssbu nvn_vk_m4.c 360-600) with a driver
-   blocklist (RADV RDNA4 hang), or a loading-screen barrier (ssbu `m4_barrier`): then async shaders by default.
-9. Smaller: real GPU timestamps for counters (Z-A exec.c 288-300; `OP_REPORT_COUNTER` answers a running total);
-   `descset_sync` dirty range (gpu_desc.c 358-381); device-memory headroom via VK_EXT_memory_budget (`vk_alloc` 64 MB
-   blocks on the render thread, 8-19 ms each); pipeline workers by CPU count; anisotropy cap; spirv-opt; real
-   occlusion queries; FIFO pacing; rendering suspects (OP_MULTI_DRAW_INDIRECT / OP_DRAW_XFB / OP_DRAW_TEXTURE
-   skipped at log level 1, indirect quads not expanded, depth clamp on in every pass, AMD quad lanes from pixel
-   position).
-
-CPU / lifter:
-1. **Fewer SAVEC stores**: 19.4 registers per call (5,415 sites); x9-x17 dead across a call; x19-x28 need no store
-   before a plain call (Z-A regpromote.py) except with landing pads, secondary entries, setjmp, hook sites. ~55% fewer.
-2. **`preserve_none` on lifted functions** (Win64 callee-saved pushes and xmm6-15 spills for nothing): maybe 3-10%.
-3. **PGO** (TotK +6-12%, `docs/pgo.md`: clang-cl `/clang:-fprofile-generate`, profraw on a timer and at exit; record a
-   digest of a64rt.h).
-4. Inline small leaf callees (9-11% of 634,507 `bl` sites target <= 8-16 instruction leaves); plain guest loads /
-   stores with a compiler barrier on back-edges (TotK cpu.h 77-84); LDAXR / op / STLXR / CBNZ fused into one atomic
-   (71.8k sites, 3.5% of lifted samples); STL is SEQ_CST now (a64rt.h 97).
-5. Host CRC32 / TBL / PMULL / AES (a64rt.c 15-33, 202, 212-228); branch-free vector fmin / fmax / FCVTZS / FRINTA
-   with a NaN guard (a64rt.h 208-312); dispatch table as 32-bit offsets; `host_cntpct` multiply not divide.
-6. Build: giant cold functions at -O0 (95 functions >= 3,000 instructions, largest f_710127f998 82,861), cost-balanced
-   chunks, `/GS-`. On the laptop try `-DNX_STACK_PLAIN=ON` and `-DNX_LIFT_OPT=-O2` with drawing off (ABBA).
-
-Kernel / I/O:
-1. **Overlapped RomFS / NCA reads** (romfs.c 248, nca.c, services/fs.c 213 serialise every thread on one handle):
-   `FILE_FLAG_OVERLAPPED` + per-call event. Check overlap with NX_FS_TRACE first.
-2. NCA reads with in-place AES-NI CTR (packages only; ~600 MB/s now).
-3. One logical processor per physical core behind a switch (Savage Wind +4-10%); MMCSS "Games"; release the core only
-   around IPC that can block (svc.c 203-204); deferred async preemption; priority inheritance, no async preemption
-   inside SDK spin locks (TLR+0x100); kernel lists that don't scan every thread ever made (kernel.c 56, 230, 530,
-   752); PrefetchVirtualMemory over lifted text; libc HLE (~3% of Z-A's CPU).
+1. **Fractional render scale** (Z-A output_scale.c: a float scale in push constants): 2x renders 2.25x a 1440p
+   window's pixels; also what FSR 2 upscaling presets need.
+2. **XFB skinning into a device-local mirror** (Z-A exec.c 5851-5960; 3 ms on a 1660 Super): skinned vertices go
+   over PCIe on the laptop. Needs "GPU-written" stamps so `mirror_sync` doesn't clobber, and a copy-back.
+3. **Uploads / texture creation out of the pass** (TotK vk_texture.c 894-1010): later uploads still end the pass with
+   full barriers; deswizzle / ASTC on workers, prefetch at nvnTexturePoolRegisterTexture (the 5-9 ms spikes at 2x).
+4. **Fix the lazy pass-end barriers** (above; ~0.1-0.2 ms at 2x).
+5. The fused-exclusive crash (above), then PGO by default (a profile per lift).
+6. Lifter: inline small leaf callees (9-11% of 634,507 `bl` sites target <= 16-instruction leaves); host CRC32 / TBL /
+   PMULL / AES; branch-free vector fmin / fmax / FCVTZS with a NaN guard; dispatch table as 32-bit offsets; giant cold
+   functions at -O0, `/GS-`; STL as release instead of SEQ_CST.
+7. GPU: graphics pipeline libraries + fast link (TotK, ssbu) then async shaders by default; a vkCmd* recorder thread
+   (only once translation exceeds the GPU frame); UBOs as UNIFORM_BUFFER_DYNAMIC, push descriptor templates; the game's
+   resolution controller fed real GPU times; real GPU timestamps for counters.
+8. Kernel / I/O: overlapped RomFS / NCA reads (one synchronous handle serialises every thread; check with
+   NX_FS_TRACE first); NCA AES-NI CTR in place (packages); MMCSS "Games"; release the core only around IPC that can
+   block; kernel lists that don't scan every thread ever made.
+9. Overlap CPU and GPU by answering SyncWait a frame late (Z-A): only helps where the guest waits on the GPU (not at
+   1x here); large, high risk.
 
 ## Debugging tools
 
-- `run.ps1 -DumpAfter N` (mutex owners, host stacks, audout state); `NX_DUMP_MEM=addr:len,*ptr:len` (also on
-  crash); `NX_TRACE_CALLS=addr,...`; `NX_WATCH_MEM=addr:len@ms` (every write: writer, old value, host stack of
-  `NX_WATCH_DEPTH` frames; GPU writes not seen; mods arm it with `host->watch_mem`); `NX_ONE_CORE` (races vs logic).
-- GPU: NX_PIPE_LOG, NX_SKIP_SHADERS=hash,..., NX_GPU_SKIP=1|2|4|8 (all / global-memory / textured / non-2D),
-  NX_NO_DISCARD, NX_DUMP_SSBO=<hash>, NX_DUMP_DRAWS=<target> with F12 (target after every draw), per-draw sample
-  counts and indirect args in traced frames, NX_DEBUG_RT=<rt>:<bits> (1 discards off, 2 depth test off, 4 depth clamp
-  on), NX_TRACE_VCB=<c>:<row>,..;.. (vertex uniform rows), NX_TRACE_FILTER='960x540 f41', NX_VIEW_LOG=1.
-- Input: NX_INPUT_LOG, NX_INPUT_REPLAY=<log> (`build/input_walkout.log`, `input_door.log`). Unattended runs only:
-  `NX_INPUT='300-30000/60:A;330-30000/60:B'`. New game: `--save <empty dir>`.
+- `run.ps1 -DumpAfter N` (mutex owners, host stacks, audout state); `NX_DUMP_MEM=addr:len,*ptr:len` (also on crash);
+  `NX_TRACE_CALLS=addr,...`; `NX_WATCH_MEM=addr:len@ms` (every write: writer, old value, host stack); `NX_ONE_CORE`.
+- GPU: NX_PIPE_LOG, NX_SKIP_SHADERS=hash,..., NX_GPU_SKIP=1|2|4|8, NX_NO_DISCARD, NX_DUMP_SSBO=<hash>,
+  NX_DUMP_DRAWS=<target> with F12, NX_DUMP=<frames> (the frame and every image to `build/frames`), NX_DEBUG_RT=<rt>:<bits>,
+  NX_TRACE_VCB=<c>:<row>,..;.., NX_TRACE_FILTER='960x540 f41', NX_VIEW_LOG=1.
+- Input: NX_INPUT_LOG, NX_INPUT_REPLAY=<log>. Unattended runs only, with the user's OK: `NX_INPUT='300-30000/60:A'`.
+  New game: `--save <empty dir>`.
 - Lua errors: patches.txt main+b5d8fc `after script_error` (lua.c) logs class.method and the error before the
-  Haxe-Lua invoker's abort (main+b5d450 CallImpl, svcBreak out of main+b5d930; text also at [main+46d4238]).
-- Ghidra headless: `nxrecomp/tools/ghidra/decomp.ps1 <abs out> <off>...` inside violetrecomp (`<off>!` makes a
-  function Ghidra lacks, `x<off>` callers only; ~10 s). idalib on `main.elf.i64`: 15 s a batch; IDA batch `idat -A
-  -S<script>` on a copy.
-- **Whole-game Hex-Rays decompile** (2026-11-12, IDA 9.3): `build/analysis/hexrays/main_0.c` .. `main_7.c` (326 MB,
-  163,935 functions, blocks of 256 dealt round robin, so grep all eight). Each function follows a line
-  `// ==== <ELF offset hex> <name>` (offset = main+off): `rg -n "^// ==== b5d8fc " build/analysis/hexrays`.
-  1,095 failed (`FAILED: <why>`): 964 are import stubs ("special segments"), 27 call analysis, 2 too big. Made by
-  `nxrecomp/tools/ida_decomp.ps1 dump\elf\main.elf build\analysis\hexrays -Seeds build\analysis\main_ida.json`:
-  analysis 17 min (162,375 functions + 1,557 from the lifter's export) writes `dump/elf/main.elf.i64` (815 MB), then
-  8 idat processes on copies, 17 min. idat needs `TVHEADLESS=1` to run without a console (the script sets it).
-  Not done: sdk, subsdk0 (same command on their ELFs). The script's decompile step ran as written; its analysis
-  step was started by hand that day (same idat arguments), so the script's own analysis branch is untested. The
-  earlier "idat batch failed to start" did not recur and its cause was never found. Shard speed 10-40 functions/s,
-  idat about 0.5-1 GB each. Hex-Rays names are IDA's defaults (`sub_<off>`): no symbols or types were imported.
-  The .i64 opens in the IDA GUI; batch scripts should work on a copy.
+  invoker's abort (main+b5d450 CallImpl).
+- **Hex-Rays decompile of main** (IDA 9.3): `build/analysis/hexrays/main_0.c` .. `main_7.c` (326 MB, 163,935
+  functions dealt round robin: grep all eight); `// ==== <offset hex> <name>`: `rg -n "^// ==== b5d8fc "
+  build/analysis/hexrays`. Made by `nxrecomp/tools/ida_decomp.ps1 dump\elf\main.elf build\analysis\hexrays -Seeds
+  build\analysis\main_ida.json` (17 + 17 min; `TVHEADLESS=1`). sdk / subsdk0 not done. Names are IDA's defaults.
+  Functions reached only through vtables have no callers there: hook and log instead (`h_heap_oom`).
+- Ghidra headless: `nxrecomp/tools/ghidra/decomp.ps1 <abs out> <off>...` inside violetrecomp (~10 s).
 
 ## Local play
 
-- **Rooms**: Violet builds with NETPLAY (`G_NETPLAY`). Two instances did Union Circle and full Tera raids. Test set-up:
-  `NX_ROOM=127.0.0.1:24872`, `NX_NICK=A|B`, saves `save-net-a` / `-b`; ~5.3 GB private each; a force-killed client
-  keeps its nickname until ENet times out (~30 s): restart the server too. What it took: nifm accepts preset-1
-  requests (`SetLocalNetworkMode(true)`); advertise data set before CreateNetwork was wiped by it; the link-code
-  keyboard (swkbd.c); the NG word filter aborts without system data `0100000000000823` (NgWord2, `build/sysdata/`);
-  bsd eventfd; ConnectPrivate (layout from memory, unverified). The room client sends at once.
+- **Rooms**: Violet builds with NETPLAY. Two instances did Union Circle and full Tera raids. Test set-up:
+  `NX_ROOM=127.0.0.1:24872`, `NX_NICK=A|B`, saves `save-net-a` / `-b`; a force-killed client keeps its nickname until
+  ENet times out (~30 s). What it took: nifm accepts preset-1 requests; advertise data set after CreateNetwork; the
+  link-code keyboard; the NG word filter needs system data `0100000000000823` (NgWord2, `build/sysdata/`); bsd eventfd.
 - Hosting: `room_server.exe --port 24872 --name ... --game-id 01008F6008C5E000 --game "Pokemon Violet" [--password
-  pw]` (without the game id the browser's game filter hides it); playit.gg tunnels UDP 24872 (ngrok has no UDP).
-- **Real Switch**: LDN is Wi-Fi (action frames OUI 00:22:AA on channels 1 / 6 / 11, then a WPA2 network keyed from a
-  console key, Pia over UDP); Windows drivers can't send action frames or host such an AP. Hence `../ldn-beacon`
-  (ESP32-S3). Redirecting DNS to play online doesn't work: NPLN is TLS against Nintendo's CA + account / NSO tokens.
-- A recomp host leaves the security parameter (server random) zero; a trade opens its network twice (2026-11-11:
-  `network of 192.168.1.2` at :34 and :37), the Switch joined 2 s after the second; first attempt dropped after 1.7 s
-  (deauthentication reason 3), second stayed. **Link trades with a real Switch work** (user, 2026-11-11).
-- **Why joins dropped:** a link-code search hosts and scans in turns (log: "created a network", "scan found 0",
-  created again). The beacon kept a torn-down network on the air until 5 s without a ScanResp; the Switch joined
-  it, the PC (scanning, not hosting) ignored the Connect, and the Switch left ~515 ms after the auth response.
-  Fixed: ldn_net.c sends DestroyNetwork to whoever scanned in the last 10 s (`watchers`; not broadcast, a room
-  member connected elsewhere might take it as its own), and the beacon drops the network on it (fallback: scan
-  every 0.5 s, off after 2.5 s). Next trade: first join stayed, 1 s after the network went up (user: the rest of
-  the wait is the search itself, slow online too).
-- In Union Circle the world is simulated by one player at a time (it moves). Raids there are separate per player
-  (others' raids only joined from the menu).
+  pw]`; playit.gg tunnels UDP 24872.
+- **Real Switch** through `../ldn-beacon` (LDN is Wi-Fi action frames + a WPA2 network; Windows can't host it).
+  **Link trades and raids with a real Switch work** (2026-11-11). A link-code search hosts and scans in turns: ldn_net.c
+  sends DestroyNetwork to recent scanners and the beacon drops the network (else the Switch joined a torn-down one).
+- Online play through Nintendo can't be redirected (NPLN is TLS against Nintendo's CA + account / NSO tokens).
+- In Union Circle the world is simulated by one player at a time. Raids there are separate per player.
 
 ## Packaging
 
-- Friends supply keys, firmware, base + update NSPs (DLC optional); nothing is extracted. With `.nsp` files in
-  `--game <dir>` the runtime reads them directly: prod.keys / title.keys there or in `%USERPROFILE%\.switch`,
-  tickets, NCA3 header XTS, AES-CTR, the update's BKTR over the base RomFS, IVFC level 6; DLC and NgWord2 by data id
-  (`game\firmware\*.nca`); ExeFS, control.nacp, icon. Byte-identical with dump/romfs, ~600 MB/s (each thread its own
-  CNG key copy). Module images built from the NSOs at first start (image.c, 156 ms; another game version stops with a
-  message).
-- `violetrecomp_pkg` (NX_PACKAGE, `Pokemon Violet.exe`, no console, -O3 `lifted_o3`, speed not measured): game files
-  in `game\`; save, cache, log.txt, `dumps\` under `%LOCALAPPDATA%\Pokemon Violet\`; F3 off, F5 / F11 off, F12 kept.
-  Translator from `translator\` (embeddable Python 3.12.10 + translate.py + maxwell.py + glslangValidator). First
-  start: "COMPILING SHADERS: done/total", input held until the burst ends. The user's test folder has hard links to
-  `rom\`'s NSPs, prod.keys and NgWord2 in its `game\`: empty it before sending.
+- Friends supply keys, firmware, base + update NSPs (DLC optional); nothing is extracted: the runtime reads NSPs
+  directly (tickets, NCA3, AES-CTR, the update's BKTR, IVFC), ~600 MB/s. Module images built from the NSOs at first
+  start (image.c).
+- `violetrecomp_pkg` (NX_PACKAGE, `Pokemon Violet.exe`, no console): game files in `game\`; save, cache, log, `dumps\`
+  under `%LOCALAPPDATA%\Pokemon Violet\`; translator from `translator\` (embeddable Python + translate.py +
+  glslangValidator); first start "COMPILING SHADERS". The user's test folder has hard links to `rom\`'s NSPs, keys and
+  NgWord2 in its `game\`: empty it before sending.
 - Linux: Proton / Wine first; native port surveyed in `nxrecomp/docs/PLATFORMS.md`.
 
 ## Mods
@@ -1087,347 +378,115 @@ Kernel / I/O:
 ### Framework
 
 - nxrecomp `runtime/nxmod.h` + `mods.c`: DLLs in `<exe>\mods\` (NX_MODS=0 none) get window events, can hold input, draw
-  over the swapchain; `modkit/` = Dear ImGui (vcpkg `imgui[vulkan-binding]`; not its SDL3 backend: events on the
-  window thread, drawing on the render thread). `nx_mod()` in nxrecomp.cmake; the game exe depends on every mod.
-- **Mods' settings** (nxmod.h version 5, 2026-11-12): `host->setting_get / setting_set (+ _int)` keep values in
-  `settings.ini` as `mod.<key>` (options.c's store; written within a frame or two). First user: F8's "All spawns
-  shiny" and "No contact battles" (`mod.mons.all_shiny`, `mod.mons.no_battles`), put back in `nx_mod_init`.
-  Checked: a seeded `mod.mons.all_shiny=1` logs `wild: all spawns shiny on` at start and all five mods load.
-  Ticking the box and restarting is the user's check.
-- **Lua bridge** (nxmod.h version 3): `host->run_script(text, done, ud)`; a chunk returning `NXMOD_SCRIPT_AGAIN` retries
-  later; `--quiet` chunks aren't logged on success. `violetrecomp/lua.c` + patches.txt `after lua_pcall_entry` at
-  b5ddd0. Lua C API in main: lua_load `232e0`, getS `24b90`, lua_gettop `b5d980`, lua_settop `b5db00`,
-  lua_tolstring `b646d0`, lua_pushstring `b85bd0`, lua_rotate `b5dcd0`, lua_pushfstring `1a2cd10`, **lua_pcallk
-  `b5ddd0`** (~300 callers); VM `278b0` / `4487c` / `26c60`.
-- Native Lua classes: each `luaL_requiref(L, "c<hash>", open, 1)` (callers of main+e7d200) names a class; its open
-  function's ADRP+ADD refs are the luaL_Reg tables. Mon object `c113335A8` (172 methods), makers `cA20E9FCA`
-  (f80B8DD7C from PokeData = native 160dd10; f6644EFDC = 90d010). Native -> script calls hash class and method (FNV-1a
-  64, game basis) via 15745bc / 18e4050 (202f80c(class, method), 18e3f2c(class, method, &arg)).
-- Tools: `tools/luabc.py` (find / dis / callers), `tools/xref.py` (ADRP+ADD refs), `tools/bfbs.py` (FlatBuffers
-  schemas, also from romfs), `tools/img.py` (`ptr <off>` finds luaL_Reg entries in main.img).
+  over the swapchain; Dear ImGui via vcpkg (events on the window thread, drawing on the render thread).
+- Settings: `host->setting_get / setting_set` keep values in `settings.ini` as `mod.<key>` (F8's all-shiny and
+  no-battles use it).
+- **Lua bridge**: `host->run_script(text, done, ud)` runs chunks at lua_pcallk's entry (patches.txt `after
+  lua_pcall_entry` at b5ddd0). Lua C API in main: lua_load `232e0`, lua_gettop `b5d980`, lua_settop `b5db00`,
+  lua_tolstring `b646d0`, lua_pushstring `b85bd0`, lua_rotate `b5dcd0`, lua_pushfstring `1a2cd10`, lua_pcallk `b5ddd0`;
+  VM `278b0` / `4487c` / `26c60`; lua_gc `c8c520`; luaC_fullgc `2b690`.
+- Native Lua classes: `luaL_requiref(L, "c<hash>", open, 1)` (callers of main+e7d200); the open function's ADRP+ADD
+  refs are the luaL_Reg tables. Mon object `c113335A8`. Native -> script calls hash class and method (FNV-1a 64, game
+  basis) via 15745bc / 18e4050.
+- Tools: `tools/luabc.py`, `tools/xref.py` (ADRP+ADD refs), `tools/bfbs.py`, `tools/img.py`.
 
 ### F6: Tera raids (user-checked)
 
-- Raid blocks found by scanning guest memory (heap and alias region, 3.5 GB) for den-shaped 0x20 entries (PKHeX
-  RaidSpawnList9 layout: Paldea 72 after a 0x10 seed header, Kitakami 100, Blueberry 80); a run counts dens with a
-  seed (`den_live`), allows all-zero slots (`den_slot`), needs 90% distinct seeds; unused slots hidden. Each den's
-  raid from its seed; seeds written for a chosen species / shiny / Tera (Tera9RNG / Encounter9RNG behaviour, our
-  code); story progress picks the 1-5 star roll (black dens have none). Names by DevID (`e.dev`).
-- Data: `python mods/raids/raiddata.py` -> `build/mods/raids.dat` (needs `build/ooz`). Raid tables
-  `world/data/raid/{,su1_,su2_}raid_enemy_0N/..._array.bin` (ROM type 1 Scarlet, 2 Violet). Area names
-  `build/mods/raid_areas.txt` (Paldea = place_name.dat line 2 * area + 4; **Kitakami / Blueberry numbers from memory,
-  unchecked**). List columns: Den, Active, Area, From you, Position, Stars, Pokemon, Tera, Shiny, Seed (sortable);
-  player position polled via Lua twice a second.
+- Raid blocks found by scanning guest memory for den-shaped 0x20 entries (Paldea 72 after a 0x10 seed header, Kitakami
+  100, Blueberry 80). Each den's raid from its seed; seeds written for a chosen species / shiny / Tera (our own
+  Tera9RNG / Encounter9RNG); story progress picks the star roll.
+- Data: `python mods/raids/raiddata.py` -> `build/mods/raids.dat`. Raid tables
+  `world/data/raid/{,su1_,su2_}raid_enemy_0N/..._array.bin`. Area names `build/mods/raid_areas.txt` (**Kitakami /
+  Blueberry numbers unchecked**).
 
-### Raid crystals rebuilt on demand
+### Raid crystals rebuilt on demand (`raidgem.c`)
 
-Seeds written with F6 showed only after a restart. Found with Ghidra (`build/ghidra_gem1..5.txt`):
-- Events `RaidGemForceLottery` / `RaidGemForceReflection` are posted by `01ea821c(target, name)` (FNV-1a 64 under key
-  0xdcbfd50a277e546d, via 015745bc). Lottery (new-day reroll) from 01d93564 (day counter M+0x16a8) and 01ea82c0
-  (new-day reset); Reflection from the manager's update 2933374(M, dt) when M+0x1662 is set.
-- Setting entry+0x98 = 0, crystal+0xd1 = 1 is the game's way to **remove** a den (the update drops a crystal once its
-  own update 2936d94 says gone, then erases entries with +0x98 = 0 and no crystal): the first attempt made crystals
-  vanish for good.
-- Groups: 0 = the player's own dens; 1-3 per other player of a session (29337b4 registers a player's 300 x 6-byte
-  list, 29341d8 drops one, 01ea82c0 all). M+0x2d is our own list sent to others. The 6 bytes (area, group, point,
-  +0x40, black / event bits, region) carry no seed: a Switch raid's boss comes with the lobby data (not researched).
-- Entries are made by **e23ec8(M, force)** (manager method table at main.elf file offset 3a65428): bumps generation
-  M+0x7d8; without force, with M+0x1661 clear and dens in the save (e2913c), walks 3 x 100 dens (0x20 each at +0x50,
-  +0xcd8, +0x1958: area, group, point, u64 seed, content, claimed), finds the spawn point (e25b3c), adds the entry
-  with the raid from the seed (e26fec(M, point, rng, seed, event index, 0); 1 also writes the save: the reroll).
-  Otherwise resets (e29340) and rerolls. An entry keeps its raid (+0x20..+0x68).
-- `violetrecomp/raidgem.c` (patches.txt `main+2933398 after raidgem_update`; export `violet_raid_refresh`): marks
-  group-0 entries the game's way, waits until erased (up to 300 updates), `guest_call` e23ec8(M, 0), sets M+0x1662;
-  refused when M+0x1661 is set. User run 2026-11-09: 119 own dens marked, placed again after 32 updates. **Whether
-  crystals reappear on screen: not reported.** If not: the Reflection / Lottery receiver (M+8) and where the crystal
-  object (+0x70) is made.
-- Den entry layout (confirmed live): +0x20 float x, y, z, +0x40 value 0-17 (Tera type?), +0x44 area (= vector index;
-  23 vectors, regions mixed), +0x48 group, +0x4c point, +0x64 region 0/1/2. North -z, east +x. raidgem.c copies
-  placed dens every 30 updates; export `violet_raid_points(out, max)`.
+- Entries are made by **e23ec8(M, force)** (manager vtable at file offset 3a65428): walks 3 x 100 dens (0x20 each at
+  +0x50, +0xcd8, +0x1958: area, group, point, u64 seed, content, claimed) and adds an entry with the raid from the seed
+  (e26fec). Setting entry+0x98 = 0, crystal+0xd1 = 1 **removes** a den. Groups: 0 own dens, 1-3 other players.
+- raidgem.c (`main+2933398 after raidgem_update`; export `violet_raid_refresh`) marks group-0 entries the game's way,
+  waits until erased, calls e23ec8(M, 0), sets M+0x1662. **Whether crystals reappear on screen: not reported.**
+- Den entry: +0x20 float x, y, z, +0x40 0-17 (Tera?), +0x44 area, +0x48 group, +0x4c point, +0x64 region. North -z,
+  east +x. Export `violet_raid_points`.
 
 ### Event raids
 
-- How a console gets them: Poké Portal News syncs the BCAT delivery cache; `BcatClient::ParseAndSave` (bcat_client.cpp;
-  "BcatLoad Raid", "BcatLoad EncountOutbreak") stores the files in save blocks, size-checked against
-  `RaidSaveDataAccessor::kDeliveryRaid*DataSize`. Files (strings at main.elf ~0x3c5c4e4-0x3c5c5a4):
-  `raid/raid_enemy_array_3_0_0`, `raid/fixed_reward_item_array_3_0_0`, `raid/lottery_reward_item_array_3_0_0`,
-  `raid/raid_priority_array_3_0_0`; outbreaks kEncountOutbreakPokedataPath, kEncountOutbreakZone{Main,Su1,Su2}Path
-  (`world/data/encount/point_data/outbreak_point_data/outbreak_point_{main,su2}.bin|bfbs`). nn::bcat API:
-  MountDeliveryCacheStorage, DeliveryCacheDirectory Open/Read, DeliveryCacheFile Open/GetSize/Read,
-  RequestSyncDeliveryCache. nxrecomp `services/bcat.c` is an empty stub.
-- Save blocks (PKHeX SaveBlockAccessor9SV): KBCATRaidEnemyArray 0520A1B0 (30,000 bytes), FixedRewardItemArray 7D6C2B82
-  (27,456), LotteryRewardItemArray A52B4811 (53,464), PriorityArray 095451E4 (88), Identifier 37B99B4D (4), plus
-  KBCATOutbreak*. Den content 2 = event, 3 = 7-star. `svedit dump <main> <dir> <key>...` writes blocks out.
-- **A friend's save** (`build/saves/friend-2026-11-07/main`; dumps in `build/bcat/friend/`): `svedit copy <main>
-  <from> "^KBCAT|^KOutbreakBC"` copied the 5 KBCATRaid*, KBCATOutbreak* and 336 KOutbreakBC* blocks into `build/save`
-  (backup `build/saves/save-backup-2026-11-07-preevent`). Dens take delivered raids only at the new-day reroll:
-  **after a restart a black crystal showed a Rillaboom "(event)"** (user, by 2026-11-11; not fought). The identifier
-  20230728 is the event's date: the 7-star Mightiest Mark Rillaboom (Normal Tera) first ran 2023-07-28 00:00 UTC to
-  07-30 and again 08-04..06; a rerun from 2026-06-04 (Nintendo Wire) likely reused the delivery.
-- Plan for a Switch catch (talked through, untested): the Switch joins the PC's raid through ldn-beacon with its
-  clock set inside the event window (a mon's met date is the catching console's date; no time stored); 7-star bosses
-  are one per save. PKHeX's EncounterDist9 / EncounterMight9 carry no dates (only an event index), so it doesn't check
-  the met date against the event.
-- **How the game uses a delivery** (Ghidra 2026-11-11, `build/ghidra_ev*.txt` copies of the scratch runs):
-  - **Schemas** are in the romfs: `world/data/raid/delivery_raid_enemy/delivery_raid_enemy_array.bfbs` and
-    `delivery_raid_priority/delivery_raid_priority_array.bfbs`; rewards use `raid_{fixed,lottery}_reward_item/*.bfbs`.
-    Read them with `tools/bfbs.py x <path>`.
-  - **Enemy array:** `{values: [{raidEnemyInfo}]}`. Info fields: 0 romVer (0 both, 1 Scarlet, 2 Violet), 1 no, 2
-    deliveryGroupID (byte), 3 difficulty (int), 4 rate (byte, signed in the sum), 5 / 6 dropTableFix / Random (u64
-    table_name), 7 captureRate, 8 captureLv, 9 bossPokePara (PokeDataBattle, same slots as the romfs raid tables),
-    10 bossPokeSize, 11 bossDesc (RaidBossData: shield / extra actions), 12 raidTimeData.
-  - **Priority array:** `{values: [{versionNo int, deliveryGroupID {groupID_01..10 bytes}}]}`.
-  - The friend's enemy array is 72 entries: entry 0 is the Rillaboom, the other 71 are placeholders with every field
-    written.
-  - **Raid save object** (the one with dens at +0x50 / +0xcd8 / +0x1958) holds pointers to the delivery buffers:
-    +0xe308 enemy (0x7530 bytes), +0xe340 fixed rewards, +0xe378 lottery rewards, +0xe3b0 priority. +0xe300 is the
-    identifier. +0x83a8 is an int per den: its event group (below 1 = any).
-  - **Setters** (BcatClient 1d7c458 calls them in this order, M = the crystal manager of raidgem.c):
-    1d93018(M, data) enemy, 1d933a0 fixed, 1d931dc lottery, 1d92c24 priority. Each one copies `data` into the save
-    buffer, then re-points the resource via 01eaa4e0(res, &buffer): res+0x120/0x128/0x130 become the FlatBuffer view
-    (root table at +0x128). The resources are M+0x1668 enemy, +0x1678 fixed, +0x1688 lottery, +0x1698 priority;
-    01189558(obj + 0xe0) looks one up, +0x11a = loaded.
-  - The priority setter stores the old identifier in M+0x16a8 and writes versionNo as the new one (01eaa618). The
-    update (01d93564) then sees the change and posts RaidGemForceLottery: the dens are rerolled with the new events.
-  - **A den's raid** (e23ec8 -> e26fec -> e28ab0): standard dens take `Xoro(seed)`, then 012457e4 rolls the star
-    target for the story progress (e2826c: 0-4 from FSYS_RAID_DIFFICTLTY3..6_RELEASE). Event dens (content 2 / 3,
-    group from +0x83a8) roll the same star target first (only to burn the RNG and get the progress' difficulty
-    range [first target's, highest target's]; the max becomes 7 once 6 stars are out). Then 01ea8504 -> 01ea86d4
-    walks the delivered entries in order:
-    - skips an entry whose romVer is for the other game;
-    - with a group, skips an entry whose deliveryGroupID differs or whose difficulty is outside the range;
-    - sums the rates, takes NextInt(sum) on the same generator, and picks the entry where the running sum passes it.
-    This is PKHeX's dist behaviour.
-  - Rewards: 01ea9788 looks a table_name up in the romfs reward tables (M+0x1650) first, then the delivered ones
-    (M+0x1688). A made-up delivery can point its drop tables at the romfs ones.
-- **Events mod (F4, `mods/events/events.cpp`, 2026-11-11, built, not run yet).** It delivers live through
-  raidgem.c's exports. `violet_raid_delivery(which, out, max)` reads a file out of the raid save object, which
-  raidgem.c finds through the save list and e280dc. `violet_raid_deliver(parts[4])` queues new files for the setters
-  on the game thread. With an unchanged identifier, the dens are rebuilt afterwards.
-  - Shared reader / writer: `mods/common/delivery.h`. It is a small FlatBuffers writer that leaves zeros out and
-    shares vtables and equal sub-tables (2026-11-11). Table fields are queued and written after the tree,
-    breadth first, and a copy is reused only when it lies after the field pointing at it (uoffset_t is unsigned).
-    Check (a scratch program on delivery.h): the friend's 72 entries rebuild field for field, in 28,264 bytes
-    unshared and 1,816 shared (its 71 placeholders are equal). All 230 PKHeX raids built as the mod builds them
-    (templates) round-trip in 28,362 of the 30,000 bytes, ~123 a raid (unshared: 105 fit, ~298 a raid).
-  - **No entry cap** in what the game does with a delivery: 027bab80 (re-pointing the resource) only builds the
-    view (root table, schema object), with no verifier and no size or count check. 01ea86d4 walks the whole `values`
-    vector through the reflection accessors. BcatClient checks only the file size (30,000). Other readers of the
-    enemy resource (if any) not checked.
-  - **When events ran:** `mods/events/event_dates.csv` (committed, hand-made from Serebii's event list and event
-    pages through the web-fetch agent, 2026-11-11; 241 rows). Columns start, end, event, species, form, stars, tera,
-    version, shiny, pkhex. A row matches every PKHeX raid of its species and stars whose form, Tera, game and
-    shininess don't contradict it. pkhex (`D2` / `M1`: events.txt's kind and index, shown in the Pokemon cell's
-    tooltip) narrows it further. The index isn't unique per delivery (Salamence D1 and Rayquaza D1 share it).
-    Built to `build/cmake/mods/violet_events/` (game.cmake POST_BUILD); package.ps1 copies a mod's own folder.
-    Matching (scratch replica): 214 of 230 raids dated. Undated: one group of 4-5 stars (Gengar, Gyarados,
-    Bronzong, Lucario, Florges, Mimikyu, D2) not on Serebii's list. Rows without a raid: the 2025 shiny Ruinous
-    legends (not in PKHeX 26.10.18's lists). Gaps in the CSV: second-week Blissey of the 2024 Mighty events; some
-    reruns the index leaves out (only some 2026 ones filled in).
-  - **Game clock:** `<cache dir>\clock.txt` (Unix seconds on the first line) starts the game's clock there at every
-    start (nxrecomp time.c, after NX_TIME). The Events window writes it ("Game clock": a date from the Ran column,
-    noon local) and removes it ("Back to real time").
-  - Data:
-    - `svedit events <dir>` writes `events.txt`: PKHeX's Encounters9.Dist (174) and .Might (56) in the game's
-      terms, DevID through SpeciesConverter.GetInternal9.
-    - raiddata.py writes `raid_templates.txt`: Paldea's first both-games raid per star level, giving drop tables,
-      capture rate, size, bossDesc (WAZA extra actions and the charge penalty move dropped) and time data.
-    - raids.dat is version 2 and adds a personal table (DevID, form → national, types, gender, abilities).
-  - A built entry:
-    - the mon comes from PKHeX: talentType VALUE with fixed IVs, else V_NUM;
-    - the rest comes from the template of its star level; 7 stars use 6's template with hpCoef 3500 (the
-      Rillaboom's);
-    - captureLv = level, deliveryGroupID 1, no = identifier * 100 + n;
-    - the priority is {identifier, groupID_01 = "Event dens"}.
-  - **Unverified guesses:**
-    - groupID_N is the number of dens a reroll makes group N (the friend's 7-star delivery has 1);
-    - F6 assumes event dens are group 1 and doesn't read +0x83a8;
-    - fixed IVs draw nothing from the RNG;
-    - the progress' difficulty range (raids.cpp event_range) is taken from PKHeX's star thresholds.
-  - F6 shows delivered raids in its den list and picker ("(event)") and finds seeds for them. Den content 2 / 3 is in
-    its write combo.
-  - Backups: the save's delivery when the mod first reads it goes to `build/events/backup-<identifier>/`, as BCAT
-    file names. Any such folder (or one with `raid/`) can be delivered from the window.
-- **Event outbreaks** (Ghidra 12.1.3 on the data drive, `-Ghidra <dir>`; 2026-11-11):
-  - BCAT files `encountOutbreak/{pokedata,zone_main,zone_su1,zone_su2}_array_3_0_0`. Save blocks
-    KBCATOutbreakPokeData 6C1A131B (3,608 = 0xe18), KBCATOutbreakZonesPaldea 3FDC5DFF / Kitakami F9F156A3 /
-    Blueberry 1B45E41C (768 = 0x300 each), KBCATOutbreakEnabled 61552076 (Bool). Active ones: KOutbreakBC01..10
-    {Main,DLC1,DLC2}{CenterPos, DummyPos, Species, Form, Found, NumKOed, TotalSpawns, Materials, DeliveryID (u64),
-    DeliveryZoneID (byte), DeliveryPokeID (byte)}, KOutbreakBC{Main,DLC1,DLC2}NumActive.
-  - **Schemas** (romfs; found by checking guessed paths' FNV hashes against data.trpfd's list, as trinity.py's
-    `has()` does):
-    `world/data/encount/delivery_outbreak/delivery_outbreak_{pokedata,zone_main,zone_su1,zone_su2}/
-    delivery_outbreak_<x>_array.bfbs`.
-    - pokedata `{values: [DeliveryOutbreakPokeData]}`: 0 id u64, 1 devid u16, 2 sex int, 3 formno byte, 4 / 5 min /
-      maxlevel short, 6 area (table AreaNo_DO: 23 bools _1.._23), 7 locationName u64 (hash), 8 enabletable (struct
-      5 bools land / up_water / underwater / air1 / air2), 9 versiontable (table A, B), 10 bringItem (struct itemID
-      int, bringRate byte), 11 enableRarePercentage bool, 12 rarePercentage float, 13 addRibbonType int (RibbonType),
-      14 addRibbonPercentage float, 15 enableScaleRange bool, 16 / 17 min / maxScale short.
-    - each zone file `{values: [{0 zoneid u64, 1 lotvalue short, 2 poke1 u64, 3 poke1lotvalue short, ... 10 poke5,
-      11 poke5lotvalue}]}`.
-  - The friend's blocks read cleanly with these: 30 pokedata and 10 zones per region, all placeholders
-    (locationName = the FNV basis, the hash of ""; versiontable A and B set). No real outbreak to copy.
-  - **Loader** 0290d3b8(M, data) (no direct callers; M = *DAT_046d4ed0): data is one struct [u32 at +0 (stored at
-    M+0x50; identifier?)][pokedata 0xe18][main 0x300][su1 0x300][su2 0x300]. It calls the setters 029293dc /
-    029294ec / 029295fc / 0292970c(M, part), which point the resources at `part` directly (no copy):
-    *(M+0x220)+0x30 (pokedata; the others likely +0x38 / 0x40 / 0x48), via 01189558 / 01eaa4e0 as for raids. Then
-    029299b4(M, 0), the refresh (also called from 8c6da4, 29288bc, 292939c); it reads the pokedata fields
-    (addRibbonType, enableRarePercentage at main_565.c's lifted lines).
-  - 0292bd38 (callers 292af5c / 292b024 / 292b0ec, one a region) copies a zone file into 10 slots of {zoneid,
-    lotvalue, poke1..5 + lot values}. **Open:** what zoneid indexes (outbreak_point_{main,su1,su2} entries? the
-    byte DeliveryZoneID suggests an index), whether pokeN is a pokedata `id`, and where the outbreak save struct
-    lives in memory (for a live export like raidgem.c's). Then the Outbreaks tab (PKHeX Encounters9.Outbreak).
-  - Lookups: strings are file offset - 0x1000 (main.elf's first segment at 0x1000 -> 0); lifted code loads them as
-    `X = 0x710<page>ull; X = X + 0x<off>ull`.
-- Other route (agreed, not started): past / custom events from PKHeX.Core's lists served as deliveries from bcat.c
-  (`build/bcat/delivery/raid/*_3_0_0`) or written as blocks; find the delivery schema (.bfbs near the raid tables?).
-  Version: 174 event raid entries in PKHeX, 23 Scarlet-only, 23 Violet-only (Scarlet-only bosses need a delivery
-  with a Violet rate or a Scarlet-rolling host). Not wanted: Nintendo's servers. Community archives of past events:
-  ask first.
+- A console gets them through BCAT (`raid/raid_enemy_array_3_0_0`, `fixed_reward_item_array`,
+  `lottery_reward_item_array`, `raid_priority_array`; outbreaks `encountOutbreak/*_3_0_0`) stored in save blocks
+  (KBCATRaidEnemyArray 0520A1B0 30,000 bytes, FixedRewardItemArray 7D6C2B82, LotteryRewardItemArray A52B4811,
+  PriorityArray 095451E4, Identifier 37B99B4D). Den content 2 = event, 3 = 7-star. nxrecomp bcat.c is a stub.
+- A friend's save's blocks copied in (`svedit copy`) gave a black crystal with a Rillaboom "(event)" after a restart
+  (identifier 20230728).
+- **How the game uses a delivery:** schemas in romfs (`world/data/raid/delivery_raid_enemy/...bfbs`,
+  `delivery_raid_priority/...`). Enemy info fields: 0 romVer (0 both, 1 Scarlet, 2 Violet), 1 no, 2 deliveryGroupID,
+  3 difficulty, 4 rate, 5 / 6 drop tables, 7 captureRate, 8 captureLv, 9 bossPokePara, 10 size, 11 bossDesc, 12
+  raidTimeData. Setters (BcatClient 1d7c458): 1d93018 enemy, 1d933a0 fixed, 1d931dc lottery, 1d92c24 priority (copy
+  into the save object at +0xe308.. and re-point the resource; a new identifier triggers RaidGemForceLottery). An event
+  den rolls its star target, then walks the entries (skip other game, other group, difficulty out of range), sums
+  rates, NextInt(sum): PKHeX's dist behaviour. Rewards look in romfs tables first, then delivered ones. **No entry
+  cap** found (no verifier; only the 30,000-byte size).
+- **Events mod (F4, built, not run yet):** delivers live through raidgem.c (`violet_raid_delivery`,
+  `violet_raid_deliver`); `mods/common/delivery.h` is a small FlatBuffers writer sharing vtables and equal sub-tables
+  (all 230 PKHeX raids fit one delivery). Dates: `mods/events/event_dates.csv` (Serebii, 214 of 230 dated). Game clock
+  from `<cache dir>\clock.txt`. Entries: the mon from PKHeX, the rest from the first normal raid template of its star
+  level (7 stars: 6's with hpCoef 3500), captureLv = level, group 1. **Guesses:** groupID_N = event dens per reroll,
+  event dens are group 1 (+0x83a8 not read), fixed IVs draw nothing, the difficulty range from PKHeX's thresholds.
+  Backups of the save's delivery in `build/events/backup-<identifier>/`.
+- **Event outbreaks:** save blocks KBCATOutbreakPokeData 6C1A131B (0xe18), zones Paldea 3FDC5DFF / Kitakami F9F156A3 /
+  Blueberry 1B45E41C (0x300), Enabled 61552076; active ones KOutbreakBC01..10*. Schemas
+  `world/data/encount/delivery_outbreak/delivery_outbreak_<x>/delivery_outbreak_<x>_array.bfbs` (pokedata: id, devid,
+  sex, form, levels, area bools, locationName, enable table, version table, bringItem, rare %, ribbon, scale; zones:
+  zoneid, lotvalue, poke1..5 + lot values). Loader 0290d3b8(M, data); setters 029293dc / 4ec / 5fc / 70c point the
+  resources at the data (no copy); refresh 029299b4. **Open:** what zoneid / pokeN index, where the outbreak struct
+  lives in memory.
+- Not wanted: Nintendo's servers. Community archives of real deliveries: the user picks, ask first.
 
 ### F7: items (user-checked)
 
-- The bag is the save's KItem block, live in memory: 3000 x 0x10 by item id {pocket, count, flags 1 new / 2 favourite
-  / 4 obtained, 0}; pockets 0 medicine, 1 balls, 2 battle, 3 berries, 4 other, 5 TMs, 6 treasures, 7 picnic, 8 key, 9
-  materials. Found by the Rotom Phone (1829) entry plus every held item in its own pocket. A direct write shows only
-  after save + restart (the bag keeps lists built at load), hence the Lua route.
-- A shop purchase writes through `main+1488d18(id, lo, hi)` -> `1488dd4`, from Lua binding `1488b90` =
-  `cACA3F5A6.f445BD6CD` (luaL_Reg at main+4420320). Bag: `C14A8D35D72F56FE9.S90D73F1D715BCBF4()`;
-  `:FB01A9B29CD4CC6CB(id, n)` add (clamped), `:FE027A297CCA14276(id, n)` remove, `:F13D72EF77582090D(id)` index,
-  `b[6][i].num`. F7 has a Lua console.
+- The bag is the save's KItem block: 3000 x 0x10 by item id {pocket, count, flags, 0}. Direct writes show only after a
+  restart; F7 goes through Lua: bag `C14A8D35D72F56FE9.S90D73F1D715BCBF4()`, `:FB01A9B29CD4CC6CB(id, n)` add,
+  `:FE027A297CCA14276(id, n)` remove. F7 has a Lua console.
 
 ### F8: Pokémon
 
-- **Box writer** (user-checked): our own PK9 writer (`mods/mons/pk9.h`: layout, crypto, UTF-8 <-> UTF-16, egg names
-  per language, ID32 <-> 6-digit ID No. + SID, shiny xor / TSV; checked with svedit `layout` / `check`), into the
-  first empty slot of the live KBox block (990 x 0x158 encrypted; empty = encrypted blank), found by 960+ consecutive
-  slots with valid checksums. Tables + trainer: svedit `monsdata` -> `build/mods/mons_species / moves / abilities /
-  exp / balls / trainer / eggs.txt` (rerun after changing saves; the trainer comes from the save's own trainer data).
-  Game-side box get `c1A1CBE3B.f6AA17B5F(box, slot)`, set `CEC4BF82A35D1E447.S0B3F69C4549A0284():
-  F518978B87DAB37D6(box, slot, mon)` (party: `c1A1CBE3B.fFCE06E04():f36E12C71(pos, mon)`), mon `:f0BD5134F()` dev id,
-  `:f5D94E897()` form. NX_MONS_TEST="<national>,<form>,<level>" (unattended; its one run logged nothing).
-- Files: `mods/mons/mons.h` (tables, trainer, `box_snapshot`, `current_trainer`, `box_put`; namespace `mons`),
-  `mons.cpp` (Pokemon / Wild spawns / Around you tabs), `egg.cpp` (Egg and Trainers tabs, `mons_egg_selftest`).
-  Dropdowns filter as you type (`filtercombo.h`).
-- **Gender** "Random" (Egg tab, box writer, wild spec): rolled on the species' ratio per mon (female when
-  1 + r % 252 < ratio); the wild spec leaves the game's own roll.
+- **Box writer** (user-checked): our PK9 writer (`mods/mons/pk9.h`) into the first empty slot of the live KBox block
+  (990 x 0x158). Tables + trainer: svedit `monsdata`. Files: `mons.h`, `mons.cpp`, `egg.cpp`, `filtercombo.h`.
+- **Eggs (PKHeX-legal offline, not tried in game):** level 1, egg location 30023 (picnic), egg date today, nickname =
+  egg name, EVs 0, level-1 moves, OT friendship = hatch counter. PID fixed at creation, shininess checked against the
+  hatcher ("Shiny for another trainer"). Trade: HT = receiver, met location 30002. Unchecked: whether SV turns a
+  traded egg's egg location into Link Trade on hatching. Egg moves not offered. Trainers tab and
+  `build/mods/mons_trainers_seen.txt`.
+- **Wild spawns:** the spawner is Lua (native `12451d0` = `c113335A8.f7AC1FE6B(spec)`; script maker
+  `C2B428A63695FD2C7.S988D7D0A4EEF693D`, called by the wild manager `C4EE52E49562F8277`); F8 wraps it (user-checked:
+  Hisuian Arcanine in Paldea). Rewriting the encounter tables in memory changes nothing (read at save load).
+  `violetrecomp/wild.c`: `after wild_create` at debf88 rewrites the spec (shiny, IVs, EVs, nature, ability, gender,
+  level), `after wild_created` at debff8 sets moves and Tera; `NX_WILD_LOG=1`. All spawns shiny (`violet_all_shiny`).
+- "Around you": wild manager W = `C4EE52E49562F8277.SF3075AB31C9E8AF4`, state W[17]; "Spawn on me" moves a spawn
+  point to the player; encounter table W[26] (`F2F6C7BBE115AFBCB` fills, `FCEEA7F4134055567` picks; restore W[26]
+  after wrapping). Union Circle: only on the simulating instance (untested).
+- **No contact battles:** `main+1d0e5d4(component, enable)` zeroed by `h_encount_enable` (main+1d0e5e4). Unconfirmed;
+  fallback event flag `FEVT_COMMON_0140_NO_ENCOUNT`.
+- Version exclusives (4.0.0): of 955 table entries 889 both, 33 Scarlet-only, 33 Violet-only (versiontable field 28).
+  Spawn-pool rules (wanted: exclusives in both, any time, equal weights, density): wrap the Lua filter
+  (`F67A9C2A9373A0AC6`); density from `encounterCountMax` / `encounterCheckInterval` (loader main+1513f24).
 
-### Eggs and trainer ids (PKHeX-legal offline, not yet tried in game)
+### F9 / F10: weather (built, not tried in game)
 
-- The egg: level 1, met level 1, obedience 1, egg location 30023 (picnic), met location 0, egg date today, no met
-  date, nickname flag set, nickname = egg name written over the species name (the rest is the expected trash), egg
-  bit, EVs 0, no item, level-1 moves with relearn moves the same, Tera one of the species' two types, OT friendship =
-  hatch counter. Choices: IVs, nature, ability (hidden too), gender, ball (PKHeX's per-species mask; never Master /
-  Cherish), Tera, shiny, cycles left (1 legal, 0 fails), custom OT, "Shiny for another trainer".
-- PID fixed at creation; shininess is checked against whoever hatches it (a traded egg takes its hatcher as OT).
-  Shiny: random low half, high = low ^ TID ^ SID ^ (0-15); not shiny: rerolled until xor >= 16 for the hatcher.
-- A trade (PKHeX UpdateHandler): HT = receiver, met location 30002 (Link Trade), met date = trade date, egg location /
-  date unchanged. On hatching the console sets OT to the hatcher, clears HT, and sets met location / date to the
-  hatch. Unchecked: whether SV turns a traded egg's egg location into Link Trade on hatching.
-- PKHeX 26.10.18 rules found: babies (Pichu, Happiny, Riolu) are Undiscovered yet hatch (no egg-group filter);
-  `monsdata` writes 329 egg species / forms; a custom OT in another language than the save's may fail the trash
-  check. Egg moves (inherited from parents) are not offered; PKHeX has SV's lists (`LearnSource9SV.GetEggMoves`).
-- Trainers tab: "Read the boxes" lists OT, ID No. / SID, game, shiny (boxes only, not the party); per row "Hatcher" /
-  "OT". Each other trainer found (OT of a non-egg mon, not ours) is kept in `build/mods/mons_trainers_seen.txt` (id32,
-  gender, version, first seen, name): "Trainers seen before" table (Hatcher / OT / Forget) and a picker under "Shiny
-  for another trainer".
-- svedit on PKHeX 26 (.NET 11): `StatNature` -> `StatAlignment`, `EncryptedPartyData` -> `WriteEncryptedDataParty`,
-  IVs via `GetIVs` / `SetIVs`, bag `.Pouches`. Save path `build\save\1-000000000000000100006d6b38726563-0\main`.
-
-### Wild spawns
-
-- Rewriting the encounter tables in memory (`world/data/encount/pokedata/pokedata{,_su1,_su2}/..._array.bin`: Paldea
-  449, Kitakami 252, Blueberry 254) **changes nothing**: the spawner reads them into its own lists at save load.
-  `main+10cd434` is not the spawner (makes ~26 mons at every load).
-- Table schema (EncountPokeData): 0 devid, 1 sex, 2 formno, 3-4 min / max level, 5 lotvalue, 6-13 biome1-4 with
-  lotvalues, 14 area, 15 locationName, 16-17 min / max height, 18 enabletable (land, up_water, underwater, air1,
-  air2), 19 timetable, 20 flagName, 21 bandrate, 22 bandtype, 23 bandpoke, 24 bandSex, 25 bandFormno, 26
-  outbreakLotvalue, 27 pokeVoiceClassification, 28 **versiontable** (sub-table: slot 0 Scarlet, 1 Violet), 29
-  bringItem.
-- Version exclusives (4.0.0): of 955 entries 889 both, 33 Scarlet-only (Paldea: Blaze Tauros, Larvitar, Pupitar,
-  Drifloon, Drifblim, Stunky, Skuntank, Deino, Zweilous, Skrelp, Dragalge, Oranguru, Stonjourner, the 7 ancient
-  Paradoxes; Kitakami: Gligar, Volbeat, Illumise, Cramorant; Blueberry: Alolan Vulpix, Plusle, Minun, Cranidos), 33
-  Violet-only (the mirror: Aqua Tauros, Misdreavus, Gulpin, Bagon, Clauncher, Passimian, Eiscue, Dreepy, the Iron
-  Paradoxes; Aipom, Morpeko; Alolan Sandshrew, Shieldon). Volbeat / Illumise / Plusle / Minun are in both at different
-  spots. PKHeX doesn't split SV's wild slots by version.
-- **The spawner is Lua**: chain `1245528 <- 1245224 <- Lua`; native `12451d0` = `c113335A8.f7AC1FE6B(spec)` (luaL_Reg
-  at main+443a538, class registered at 140ce30). Script maker `C2B428A63695FD2C7.S988D7D0A4EEF693D(?, DevID, form,
-  sex, level, ...)` (spec from `cC99399C3.f101D811F()`: devId f2247607A, form f81738FA1, sex f88C47BAC, level
-  f02983AD3, `rarePercentage` -> shiny), called only by the wild manager `C4EE52E49562F8277` (F71A61170646F68AF,
-  F61D1ABB7697071EB, F316E31E09886ADC9). F8 wraps it (original kept as `C.__nx_orig`): **user-checked** (Hisuian
-  Arcanine in Paldea).
-- **The rest of the spec: `violetrecomp/wild.c`.** Every mon param is built by constructor `debf7c(obj, spec)`
-  (`PokemonParam::Create` debe4c, 24 callers, and inlined Create `1245474`). patches.txt `after wild_create` at
-  debf88 (x1 spec) rewrites the spec on DevID + form match (shiny mode, IVs, EVs, nature, ability, gender, level);
-  `after wild_created` at debff8 (x19 param) sets moves / PP and Tera at param+0x70. InitialSpec layout in wild.c
-  (from SetupInitialSpec `160ffd0`, caller `160df74`). Mod calls the exe export `violet_wild_set`. `NX_WILD_LOG=1`
-  logs every create with 5 return addresses. Any other mon of that species made while on (raids, trades) gets the
-  spec too. All spawns shiny: `violet_all_shiny` (mode 3 rolled -> 2 always; log `wild: all shiny: first rolled
-  create made shiny`). Unconfirmed: the wild spec on a caught mon (if the overworld model isn't shiny, look at
-  `rarePercentage` `r0:f52C8AF50(...)` and the spec's `f82BDE968`).
-- **"Around you"**: wild manager instance `C4EE52E49562F8277.SF3075AB31C9E8AF4` (W); update `F648B6B775BCC730B` is a
-  state machine on W[17] (0 spawning: `FA9A2EC1E99B58D55`; 1 waiting for field objects). Player position
-  `K.SBF5E0EFFB821427F:f7360ED03()`; spawn point `cFB7F03A4.f42A4ADE3` / `f35A39D75(x, y, z, 0, radius, 0)`; info
-  `W:F654580D678C85C0E(pt)` (pos, levels, biome, area, enable_table); group into W[23] by
-  `W:F61D1ABB7697071EB(info)`, placed by `W:F9B7FBB66FA56765E`. "Spawn on me" moves info.pos to the player (offset
-  slider), only while W[17] == 0. Encounter table W[26] (class `CE1BA7320ED1C2331`): `F2F6C7BBE115AFBCB(info, ctx,
-  flag, list, weights)` fills entries + weights, returns the total; `FCEEA7F4134055567` picks (W[26] holds the
-  picker itself, no metatable: restore it after wrapping, or the next spawn fails); per-entry rules in
-  `F67A9C2A9373A0AC6` (CheckArea, CheckLocation, a ground ray, four more); ctx = `W[28]:FDCCDAF4C1D58AECA(pos)`,
-  ctx[4] / ctx[5] force a DevID / form. Entry getters f2BF366A2 DevID, fE15E9D0A form, f5B8A3FE2 sex, f4646F546 /
-  f61FD9277 levels. A weights override (K.__nx_w) is lost when the table is remade at save load. A row spawn finds
-  its entry again by DevID / form at spawn time (returning a kept entry crashed the game).
-- In Union Circle "Spawn on me" acts only on the simulating instance; spawned groups become network objects
-  (netOwnerIndex / netSerialId, c2CA78EB7.*); F47FB4E501540CBF7 keeps spawns off other players' mons. Untested.
-- **No contact battles**: behaviour-tree nodes SetEnableEncount(Blackboard) (type names main+2995db0 / 29954e0,
-  vtables 4474d48 / 4474a00) call `main+1d0e5d4(component, enable)`; wild.c `h_encount_enable` (patches.txt
-  main+1d0e5e4) zeroes it while on (export `violet_no_battles`). Unconfirmed; fallback: event flag
-  `FEVT_COMMON_0140_NO_ENCOUNT` (`C10578806AC30DCA3.SBA6FF574C1C9AA09.h[name] = v` + native `c37452BA0.f4BEF3427(name,
-  v)`).
-- **Spawn-pool rules** (user: "mess with the normal spawning rules"; ideas liked: version exclusives in both, any time
-  of day, ignore story flags, equal weights, every species everywhere): wrap the Lua filter (`F2F6C7BBE115AFBCB` /
-  `F67A9C2A9373A0AC6`), or patch the tables and reload the save, or patch the file as it's read. Density:
-  `encounterCountMax`, `encounterCheckInterval`, `encounterUnregisterFrameCount` (loader main+1513f24; refs 1514048 /
-  151415c / 15142cc); Lua `SpawnLimit` / `SpawnTimer` / `radiusSpawnArea` near main.blua line 259k. Mass outbreaks
-  are separate (BCAT `encountOutbreak/*_3_0_0`, save `KBCATOutbreak*`).
-- Leads for making mons from script: NPC trade `P2882` `FA1D3529002C3A75C(tray, pos, receivePoke)` makes the mon with
-  `CF7739C6C4D25CC45.S470187B7637D37DC(spec)` (PokeData from eventTradeList) and stores it with
-  `CD081B219DEE96EEF.S644D748FB7CE5439`; static mons: `cA20E9FCA.f80B8DD7C` (path P14484); a wild battle from script:
-  `EncountWild` users in `CA5A5606298DDCB29`.
-
-### F9 / F10: weather (built, not yet tried in game)
-
-`mods/weather/weather.cpp` -> `violet_weather.dll`: F9 toggles rain, F10 window sets any type, transition time, or
-"Game's own". Through run_script only.
-- Timeline event "Title/Weather/WeatherChange/WeatherChange" set up by 1521448: start callback 202f928 reads
-  `WeatherType` (1 when absent), calls `CFunc_Tml_SetEnvChangeSpan(seconds)` (202fa30), then 202fa74 -> 202fb44 = the
-  static call of `main.tml.TimeLineCommand` method hash `A3EC462E45551FD6` with the type. "WeatherReset": 202ff54,
-  then `CFunc_Tml_ResetWeather`, at its end 20301c0 `CFunc_Tml_ResetChangeSpan`.
-- Lua class `CA71F0CDF966F3175`; the mod tries `S<hash>` then `F<hash>`: set `A3EC462E45551FD6(type)`, reset
-  `ECAF51D6E7046362()`, span `8614855A6EF844D8(s)`, span reset `58CE0E7D1599C50E()` (~1 s after).
-- **Type numbers are a guess** (AreaWeather9 order): 1 normal, 2 overcast, 3 rain, 4 thunderstorm, 5 intense sun, 6
-  snow, 7 snowstorm, 8 sandstorm, 9 heavy fog; a "Raw type number" box to check. Real ones: the script's bytecode, or
-  1d56928 (ConditionCurrentWeather). Open: does the game's schedule override a forced type; does the static take
-  `self`.
+`mods/weather/weather.cpp`: F9 rain, F10 any type. Lua class `CA71F0CDF966F3175`: set `A3EC462E45551FD6(type)`, reset
+`ECAF51D6E7046362()`, span `8614855A6EF844D8(s)`. **Type numbers guessed** (1 normal .. 9 heavy fog, AreaWeather9
+order); real ones in 1d56928 (ConditionCurrentWeather).
 
 ### Save edits (svedit)
 
-`violetrecomp/tools/svedit` (PKHeX.Core; game closed, back up `build/save` first): ride upgrades (dash / swim / high
-jump / glide / climb / fly + flight controls; user-checked) and raid levels 3-6; `addmon` (full IVs, the save's OT);
-`dump` / `copy` blocks; `layout` / `check` for our PK9s; `find` flags; `monsdata`. PKHeX's `KUnlocked*` = the game's
-`FSYS_*_ENABLE` / `FSYS_RAID_DIFFICTLTY*_RELEASE` (key = (uint)FNV-1a-64 of the name). In-memory flags not found by
-hash: flags stay closed-game edits. Fly points (`FSYS_YMAP_FLY_*`) not done; "story completed" not feasible. Old
-saves: `build/saves/save-backup-2026-11-05/`.
+`violetrecomp/tools/svedit` (PKHeX.Core 26.10.18, .NET 11; game closed, back up `build/save`): ride upgrades and raid
+levels (user-checked), `addmon`, `dump` / `copy` blocks, `layout` / `check`, `find` flags, `monsdata`, `events`.
+`KUnlocked*` = `FSYS_*_ENABLE` (key = (uint)FNV-1a-64 of the name). Save path
+`build\save\1-000000000000000100006d6b38726563-0\main`.
 
 ## Reference projects compared
 
-- **Pokémon Legends Z-A recomp** (`../ref/PokeZ-ARecomp-Online`, 2026-11-10): taken: the CPU-written texture fixes,
-  passes kept over re-set targets, QPC guest waits, pipeline waits on a condition variable. Ideas in the ranked
-  lists above; also RomFS mods (Z-A fs.c 328-813, trpfd unlisting), safe saves, crash explanations.
-- **TotK recomp** (`../ref/totk-pc-recomp`, 2026-11-11): taken: kspin (off by default), pipeline memo, no power
-  throttling. Its GPU design equals ours (GENERAL layouts, LOAD / STORE, full barriers).
-- **Second sweep** (TotK, Z-A, ssbu-recomp; read-only): we're already ahead on registers in locals with lazy flags,
-  flat dispatch + musttail, bindless pools + push descriptors, dynamic state, pipeline binaries / list prebuild,
-  write-watch texture checks. Checked in our code: no PGO; `NX_ASYNC_SHADERS` off outside netplay builds;
-  `rs_scale` u32 from 1; romfs.c opens a synchronous handle; `crc_bits` bit-serial; STL SEQ_CST; no `/GS-`.
-- **Savage Wind** (BotW, `../ref/SavageWindRecomp`): feedback-loop handling, async submission, one LP per core.
+- **Pokémon Legends Z-A** (`../ref/PokeZ-ARecomp-Online`): taken: CPU-written texture fixes, passes kept over re-set
+  targets, QPC waits, the FSR 2 approach. Ideas left: RomFS mods (fs.c 328-813), safe saves, crash explanations.
+- **TotK** (`../ref/totk-pc-recomp`): taken: kspin (off), pipeline memo, no power throttling, PGO. Same GPU design.
+- **ssbu-recomp**, **Savage Wind** (BotW, `../ref/SavageWindRecomp`): pipeline libraries, async submission,
+  feedback-loop handling.
