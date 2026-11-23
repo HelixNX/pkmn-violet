@@ -27,7 +27,7 @@ Never script input (`NX_INPUT`) unless the user asks. bench.ps1 presses A throug
 (`NX_INPUT=300-4000/60:A`; the laptop's title takes input only after ~frame 1,800). Never stop a running game,
 room or beacon: the user may be mid-session.
 
-**In game:** Esc frees the mouse and shows the menu bar (F1 pins it): Options (Video: frame rate, render scale, FPS,
+**In game:** Esc frees the mouse and shows the menu bar (F1 pins it): Options (Video: frame rate, render scale, anti-aliasing (FSR 2) and its sharpening, FPS,
 borderless / Alt+Enter, never exclusive fullscreen; Controls, `build\settings.ini`; Interface), Mods (windows; Manage
 disables a DLL for next start), Multiplayer (`nxrecomp/runtime/net/netmenu.c`). F3 FPS, F5 frame-rate cycle (dev),
 F12 frame capture to `build\frames\`. The menu is `nxui.dll` (`nxrecomp/ui/nxui.cpp`).
@@ -125,8 +125,14 @@ answer failed allocations; which heap fills in a long session, NOTES "Frame stal
    Needs a re-lift.
    **Plan (the user, 2026-11-17), in this order**, each A/B'd at 1x like the others (`build\ab\`, ABBA; baseline
    `build\ab\ex.exe` = the 2026-11-17 build; A/B script and order in NOTES). Then f (FSR 2); the lazy-barrier
-   line is skipped. **Next session continues a** (NOTES "preserve_none / sysv_abi on lifted functions": the static
-   check, what is built, what is left).
+   line is skipped. 2026-11-20/21 (NOTES "preserve_none / sysv_abi" and "x29 left out ..., fused exclusive loops,
+   guest cores on host cores"): a done, **sysv** is Violet's default (game.json `lift_cc`; -3.2%); b done (-2.2%);
+   c built (-1.7% in one run) but **one crash in 5 b+c runs** (main+b5ab44), cause open (the user: later);
+   d ruled out (`NX_HOST_CORES=1`: +14%, off by default). b's hole fixed 2026-11-21 (hooks reading the caller's
+   x29: the PGO session crashed in lua.c h_gc_fullgc). e built (NX_PGO=gen / use, NOTES "PGO"): -3.8% in one clean
+   pair; the bench scene moved with the user's save. f: FSR 2 native AA built 2026-11-21, menu (Options > Video)
+   2026-11-22, played 2026-11-23 ("looks good"; NOTES "FSR 2"); next 1.33x upscaling (fractional render scale),
+   then the user's items 2 (XFB skinning into a device-local mirror) and 3 (uploads out of the render pass).
    a. `preserve_none` on lifted functions (no Win64 callee-saved pushes / xmm6-15 spills; the attribute on lifted
       functions and on GuestFn / the dispatch pointers; clang 19+). Notes estimate 3-10%. 2026-11-17: on paper a
       loss (+1-5% instructions: x19-x28 spilled at call sites); `sysv_abi` (no xmm6-15 saves) about even. Both to
@@ -138,7 +144,7 @@ answer failed allocations; which heap fills in a long session, NOTES "Frame stal
    d. One emulated core per physical core (SMT siblings apart; Savage Wind +4-10%). NOTES "Kernel / I/O" 3.
    e. PGO (TotK +6-12%, `ref/totk-pc-recomp/docs/pgo.md`; a new profile per re-lift).
    Skipped for now: fixing the lazy pass-end barriers (6.11 -> 6.00 ms at 2x, off for flicker in play).
-   f. FSR 2 at 2x (NOTES "AA / upscaling plan"; AMD FidelityFX, MIT: a download, ask the user first).
+   f. FSR 2 (`deps/FidelityFX-FSR2` v2.2.1, MIT; nxrecomp `gpu_taa.c`, `fsr2.cpp`, `tools/fsr2`).
    Also open: play the 2026-11-17 build; the runtime -O3 share of its gain (an `NX_CSR_KEEP=x` exe) unmeasured.
 7. Older GPUs (RX 580 / GCN): 8-bit index and vertex input fallbacks and 64-wide waves built 2026-11-12, checked
    on the 7800 XT with `NX_NO_U8_INDICES` / `NX_NO_VI_DYNAMIC` / `NX_WARP64`; next an RX 580 tester's run

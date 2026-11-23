@@ -663,6 +663,48 @@ stand-still (the image work is for loads). Uncommitted at the end of the session
   view-projection (picked from the draws' uniforms), a reactive mask from stencil, jitter only on passes drawn with
   the scene depth, the resolve before the HUD. Steps here: a fractional render scale, Violet's camera matrices
   (NX_TRACE_VCB), motion vectors and jitter, then FSR 2 itself (AMD FidelityFX, MIT: a download, ask first).
+- **FSR 2 work, 2026-11-21** (the user: "even just for the temporal AA"; download approved): AMD FidelityFX FSR
+  2.2.1 in `deps/FidelityFX-FSR2` (tag v2.2.1, MIT). Its Vulkan backend normally builds shader permutations with
+  the bundled FidelityFX_SC.exe; plan: one permutation per pass compiled with our glslang instead (as Z-A's
+  fsr2_shaders.cpp does), no downloaded executables run. **Frame map** (`bench_fsrmap`, frame 12000, 1x, 376
+  draws; `NX_TRACE=12000 NX_DUMP=12000 NX_TRACE_VCB=...`): 128 XFB skinning draws (`@12fb5aa000`), a 1024^2 shadow
+  map (52), **the G-buffer: 102 draws, colour in slots 1-4** (`@12f80a2000`, `12f7832000`, `12f6fc2000`,
+  `12f6752000`; rt0 unbound: the trace's "rt0 0x0") **and depth f53 1920x1080**; quarter-size passes (AO / SSR?),
+  the lighting triangle (`vs 5250e040`, `fs fd87a85c`) into `@12f5ee2000` (RGBA16F, depth bound) and 31
+  transparent draws there with the depth; a bloom / luminance chain to 7x4 and back; `@12f9a02000` (fs acbcac);
+  **the tone-map, `fs 4b80c6ba33bcbb5b`, into the shown image `@12f9182000` (f56)**; **the HUD, 20 draws** (vc3 an
+  orthographic 1/960, 1/540); a last copy (`fs 2ef346`) into `@12fad3a000`. **Camera:** vertex c[5] rows 0-3 are
+  the view-projection by columns (row 3 = translation 0 -10.2 0.32 -4.9; x / y scale 1.778 = 16:9; w depends on
+  the position), the same in every draw of the frame. So: jitter the passes drawn with the f53 scene depth (the
+  G-buffer and the transparents), motion vectors from that depth and this / last frame's c[5], FSR 2 after the
+  tone-map draw and before the HUD (native AA first: everything at one size). Frame generation (asked): FSR 3's
+  takes the same inputs plus the HUD-free image (available here), but camera-only motion vectors would make moving
+  creatures ghost; per-object vectors (last frame's transforms, skinned ones too) would be their own project.
+- **Built 2026-11-21: FSR 2 native AA, `NX_TAA=1`** (off by default until played). nxrecomp: `tools/fsr2/
+  fsr2_shaders.py` (each pass in 8 variants: depth inverted, sharpening, reprojection Lanczos table or computed (the
+  backend asks for the table on wave64 AMD); glslangValidator + spirv-cross --reflect from the Vulkan SDK make the
+  SPIR-V and the resource tables AMD's tool would), `nx_fsr2` (AMD's sources; `runtime/fsr2_vk_shim.h` forced in:
+  our Vulkan functions are pointers with Vulkan's names), `runtime/fsr2.cpp` (context, Halton jitter, dispatch;
+  inputs moved to SHADER_READ_ONLY for it), `runtime/gpu_taa.c` (camera from the first G-buffer draw, viewport
+  jitter on draws with the scene depth but not full-screen triangles, after the tone-map draw: motion vectors
+  (`shaders/taa_mv.comp`, one reprojection matrix: last VP x inverse VP, so the reversed-Z sky needs no
+  division), FSR 2 into an RGBA16F image, blit back, then the HUD). game.json `"taa": {"resolve_fs":
+  "4b80c6ba33bcbb5b", "camera_cb": 5}`. Camera: near 0.32 (reversed, infinite), vertical FOV 46 deg. First test
+  (`bench_taa2`, 1x, still): resolves, edges smooth in the dump, no validation or FSR errors; 2.03 -> 2.22 ms a
+  frame (GPU busy +0.25 ms at 1080p). (The first run failed: no Lanczos-table variants, `bench_taa1`.) Open: the
+  user's look in play (camera pans: motion vectors and jitter sign; walking creatures: ghosting), then 1.33x
+  upscaling (render 75% per axis: needs a fractional render scale), the reactive mask.
+- Menu (2026-11-22): Options > Video > Anti-aliasing Off / FSR 2 (native) and Sharpening 0-1, settings.ini `taa` /
+  `taa_sharpness`, taken at the next frame (history reset; the first frame after switching on is unjittered); NX_TAA /
+  NX_TAA_SHARPNESS still decide at start when set. UiHost version 4. Upscaling presets become more entries in the
+  same list once the render size can be a fraction of the output.
+- Played 2026-11-23 (the user, 2x, uncapped): first build flickered on sharp edges and distant shadows; the title
+  screen (still camera) did not (frames 4000-4003 identical, FSR on or off). Fix: the reprojection matrix (last VP x
+  inverse of this VP) is now made in double; in float the camera translation far from the origin left it off by a
+  fraction of a pixel, differently each frame while the camera moved. After: "looks good", what is left is the
+  game's own low-resolution shadows (1024 cascades; NOTES "2K shadows": opening the map crashed). Log line every
+  600 frames (`taa: last 600 frames`): in the overworld 600 resolved, 0 reset, ~750 jittered draws, 3 full-screen,
+  ~1150 other a frame. Development menu: Jitter (dev) on / off, live.
 - Long term (asked about 2026-11-14): a Unity rewrite is no shortcut (all ~52 MB of main and the Lua by hand, and
   nothing derived could be shared). Mobile is closer through nxrecomp: the lifted C is ARM64-native, Android has
   Vulkan, the OS layer (Win32 threads, write watch, files, SDL) would need a Linux / Android side (the Z-A port
@@ -803,7 +845,7 @@ stand-still (the image work is for loads). Uncommitted at the end of the session
   was free (8 workers on ~28 GB), and 15 compiles at -O3 paged (build 4.4 -> 10.3 min). Now the lift leaves 8 GB,
   and lifted code above -O1 gets 3 GB per compile job (10 here; build 5.3 min).
 
-### preserve_none / sysv_abi on lifted functions (plan a, 2026-11-17, in progress)
+### preserve_none / sysv_abi on lifted functions (plan a, 2026-11-17/20: sysv the default)
 
 - **Static check** (clang-cl 19.1.5, -O3, the build's lifted flags, copies in a scratch dir): the attribute alone
   on every lifted function, GuestFn, call_ind / jump_ind / jump_ind_fast. main_175.c (holds `bf44f4`) 72,903 ->
@@ -815,26 +857,95 @@ stand-still (the image work is for loads). Uncommitted at the end of the session
 - `sysv_abi` (rbx, rbp, r12-r15 kept; rsi / rdi and all xmm caller-saved: no xmm6-15 saves, 276 of them in
   main_000.s): main_175 -0.1%, main_000 -0.6%, `bf44f4` 401. Neither wins on paper; the A/B decides (call
   frequencies are not in a static count).
-- **Built so far (uncommitted):** a64rt.h `NXCC` (empty by default; `NX_LIFT_CC_PRESERVE_NONE` / `NX_LIFT_CC_SYSV`
-  pick one) on GuestFn, call_ind, jump_ind, jump_ind_fast; a64lift.py writes `NXCC` on f_ / b_ definitions, every
-  funcs.h declaration (so the h_ overrides too), the trap and weak-import stubs. Default output is unchanged until
-  a re-lift, and the same after one (NXCC empty).
-- **Left:** (1) nxrecomp.cmake `NX_LIFT_CC` (win64 | preserve_none | sysv) -> the define on every target that
-  includes a64rt.h (lifted, a64rt, runtime, game host code); (2) `NXCC` on every host function stored as a GuestFn
-  (the build errors name them: nvn.c procs ~379 incl. TEX_GET / MS_SET macros, dispatch.c call_ind / jump_ind /
-  trace_call / h_longjmp / h__longjmp, movie.c m_call and its h_ overrides, main.c h_rtld_*, loader.c
-  h_lookup_global_auto) and on the 10 shared overrides.txt definitions (nvn.c, movie.c, dispatch.c): those are
-  called directly from funcs.h's declaration, so a missing NXCC there is **not** an error but a crash: declare
-  them in hos.h with NXCC so a mismatch fails to compile. patches.txt hooks (`extern void h_x(Ctx *)` at the site)
-  stay Win64. MK8 shares the runtime (its own hooks, if any, the same rule). (3) re-lift, build three exes
-  (win64 = `build\ab\ex.exe`, preserve_none, sysv), smoke-test, A/B at 1x (ABBA, video paused).
+- **What is built:** a64rt.h `NXCC` on GuestFn, call_ind, jump_ind, jump_ind_fast; a64lift.py writes it on every
+  f_ / b_ definition, funcs.h declaration and stub. The choice is per game: game.json `"lift_cc"` (win64 | sysv |
+  preserve_none; absent: win64, so MK8 is unchanged and needs no re-lift), or the cache variable `NX_LIFT_CC` to
+  compare (nxrecomp.cmake: `NX_CC_DEFS` on lifted, a64rt and the exes). Host functions stored as a GuestFn are
+  `NXCC` (nvn.c's 369 procs incl. the TEX_GET / MS_SET macros, dispatch.c, movie.c, main.c h_rtld_*, loader.c
+  h_lookup_global_auto): a missing one is a compile error (clang: incompatible function pointer types). The 10
+  shared overrides.txt functions are declared `NXCC` in hos.h, so a definition without it no longer compiles
+  either (lifted code calls them by name). patches.txt hooks stay Win64 (`extern void h_x(Ctx *)` at the site).
+  Preemption only suspends and reads a thread's context (kernel.c), so the convention does not matter there.
+- **A/B** (2026-11-20, desktop, 1x stand-still, video paused, `bench_cc_*`, order w64 pn sysv sysv pn w64; one
+  re-lift for all three, `build/ab/w64.exe` / `pn.exe` / `sysv.exe`, trees `build/cmake`, `cmake_pn`,
+  `cmake_sysv`): means win64 4.259 / 4.110 (4.185), preserve_none 4.205 / 4.151 (4.178), **sysv 3.999 / 4.103
+  (4.051, -3.2%)**; window medians 4.25 / 4.09, 4.22 / 4.145, 3.98 / 4.08. Exes 282, 311 (+10%), 286 MB. No
+  crashes, no validation lines. Read: preserve_none even (its spills at call sites cancel the pushes it saves),
+  sysv a small gain (no xmm6-15 saves), at the edge of the noise (sysv2 vs w642 level), but best in both pairs.
+  The day ran faster than 2026-11-17 for the same exe (w64 = ex.exe: 4.19 vs 4.42): compare within a day only.
+  **sysv is Violet's default** (game.json); preserve_none dropped.
+
+### x29 left out of call-site stores, fused exclusive loops, guest cores on host cores (plan b-d, 2026-11-20/21)
+
+- **b, x29 like x19-x28** (a64lift.py `CSR` = x19-x29, `CALLEE_SAVED_X`): a BL stores x29 only if csr_flow finds the
+  callee reads its caller's value (a prologue spills it: STP x29, x30 counts as a spill). 3,935 -> 3,963 needy
+  entries. The cost: frame records now hold stale caller x29 values past the first frame or two, so frame-pointer
+  walks (NX_TRACE / waitprof guest callers in kernel.c, which are bounds-checked; crash dumps; wild.c's log chain)
+  see less. Debug lift `NX_CSR_KEEP=fp` stores x29 as before. Host hooks reading c->x[29] (lua.c h_script_error)
+  run after SAVE in a function that wrote x29 itself.
+- **c, fused exclusives** (a64lift.py `excl_fusions` / `excl_stmt`; `NX_EXCL_FUSE=0` lifts them one by one):
+  `L: LD(A)XR; <data processing, branches out>; ST(L)XR Ws; CBNZ Ws, L` as one block that never touches the Ctx
+  monitor: no ops between = `__atomic_exchange_n` (18,822), one ADD(S) / SUB(S) of Rt into Rv = `__atomic_fetch_add /
+  _sub`, then the instruction itself for its result and flags (32,240; 32/64-bit), anything else a CAS loop around
+  the instructions between (65,156; 16-bit decrements, lock tries with a branch out, compare-and-swap). Survey of
+  the modules: 130,297 exclusive loads, ~100k branch-free loops. Kept out: branches into the sequence (except to
+  L), Xn written in it, patches.txt hooks, Rt = Rn, LDXP / STXP.
+- **A/B** (2026-11-20 evening, desktop, 1x, video paused, `bench_bc_*`, order sysv b bc bc b sysv; exes 286 / 276 /
+  268 MB): sysv base 4.466 / 4.411 (4.44 ms), **b 4.340 / 4.345 (4.34, -2.2%)**, b+c 4.267 (one run, -1.7% over b).
+  **The other b+c run crashed** (`bench_bc_bc1`, after ~7,200 frames in the field, on main): access violation
+  reading 0 at main+b5ab44 in f_7100b5aa9c, a list walk (x21 = [x8 + 0x10]) next to a 16-bit refcount decrement
+  at +0x1a (now a CAS loop); f_7102074494 returned [obj + 0x58] + index * 8 with both 0, i.e. an object whose array
+  is not set (half built or being torn down). Not seen before in any log. Checked after: a poison lift (b + c,
+  `NX_CSR_POISON=1`: 0xdead..1d in every x29 slot a call leaves out) ran clean (`bench_cx_poison1`), and three
+  more b+c runs ran clean (`bench_cx_bc1-3`, 4.30 / 4.33 / 4.36 ms, but GPU busy 3.2-3.35 vs ~3.05 earlier:
+  not comparable). So 1 crash in 5 b+c runs, 0 in 2 b runs; whether c causes it is open (re-read of the fusion
+  found no hole). The build in `build/cmake` is b+c (sysv).
+- **d, guest cores on host cores** (kernel.c `host_cores_init` / `host_core_follow`, `NX_HOST_CORES=1`; off by
+  default): each of the 3 guest cores gets one physical core (both SMT siblings as a CPU set; the fastest
+  EfficiencyClass; not the core of logical processor 0 when there are enough), applied with
+  SetThreadSelectedCpuSets when the core a thread holds changes (core_assign, core_move), not per hand-off. The
+  runtime's own threads stay anywhere. **A/B 2026-11-21** (desktop, 1x, the b+c exe, `bench_hc_*`, off on on
+  off): off 4.344 / 4.210 ms, **on 4.833 / 4.984 (+14%)**, 1% lows 7.5 / 8.0 -> 10.0 / 11.2 ms; it chose physical
+  cores 2, 4, 6 (2 logical processors each). Ruled out: a core holder pinned to one physical core waits for it
+  while Windows would have run it elsewhere (the runtime's own threads, the driver's, DWM share those cores).
+  Left in, off by default.
+- **b's hole, found 2026-11-21:** the PGO play session crashed at the end in lua.c `h_gc_fullgc` (reading 8):
+  that hook sits on luaC_fullgc's first instruction and reads the caller's x29 (`[x29 + 8]`, the log line's
+  "called from"); the caller no longer stored x29, so the slot held a stale 0. csr_flow had assumed hooks read
+  only registers their function wrote. Now a hook site counts as reading x29 if its function has not written it
+  on every path by then (the callers of entry hooks store it again). Counting all of x19-x29 there made 20,063
+  entries needy instead of 3,963 (needs pass up through callers); the x19-x28 rule stands (each hook reads only
+  what its function wrote, listed in csr_flow). Benches never hit it (no full collection in a stand-still run),
+  nor did the poison run.
+
+### PGO (plan e, 2026-11-21)
+
+- **Build switch** (nxrecomp.cmake): `NX_PGO=gen` compiles lifted code, a64rt and the exe with
+  `-fprofile-instr-generate` and links clang's `clang_rt.profile-x86_64.lib` (found next to clang-cl); the runtime
+  (main.c `pgo_init`) writes `pgo-<pid>.profraw` next to the exe every 30 s and at exit (`NX_PGO_RAW`: another
+  folder). `llvm-profdata merge -o x.profdata *.profraw` (next to clang-cl), then `NX_PGO=use
+  NX_PGO_PROFILE=x.profdata`; every source depends on the profile file, so a new one rebuilds. A profile fits one
+  lift (clang matches functions by a hash of their control flow; changed ones lose their counts).
+- **First profile:** `build/cmake_pgo` (gen, 744 MB exe), the user's ~25 min of play on the b+c lift: 57-63 fps
+  at 1x-ish in the field (front-end instrumentation counts every inlined LD64 / ST64: the hottest counters are
+  those, summed per file). Raw 6.1 GB, merged `build/pgo/violet.profdata` 277 MB, 278,750 functions. IR-level
+  instrumentation (`-fprofile-generate`, counters after inlining) would make the instrumented exe much faster to
+  play; not tried.
+- **A/B** (2026-11-21, desktop, 1x, `bench_pgo_*`, plain pgo pgo plain; the lift with the x29 hook fix: 3,966
+  needy entries; `build/cmake` plain 268 MB, `build/cmake_pgo` with the profile 260 MB): **pgo 1.967 / 1.977 ms,
+  plain 2.052 (-3.8%)**, 1% lows 4.55 / 4.43 vs 4.74, GPU busy 1.73 in all. plain1 is out: 2.03 ms for 13 windows,
+  then ~4.05 to the end (GPU busy 3.28; the A presses to frame 9000 likely started something at the new spot).
+  **The bench scene moved:** bench.ps1 starts from `build/save`, and the profiling session saved elsewhere: ~2.0
+  ms a frame now (GPU busy 1.73 of it) against ~4.3 at the old spot, so no comparison with earlier days, and CPU
+  gains show less here. Not the default: `build/cmake` stays plain; a re-lift wants a new profile.
 
 ### Ruled out (measured, no gain)
 
 Deferring NVN barriers; skipping skinning `vs 44f2ec77`; no barrier at pass ends (also corrupts lighting); CPU_NO_ACCESS
 pools in VRAM; staging in ReBAR VRAM; stable clocks (-13%); NX_FLUSH_DRAWS=60; colour compression / format lists (no
 DCC decompress in RGP); shader-quality changes above; kspin on the laptop; attachment-only barriers between
-passes on one target and dropping the barriers around compute dispatches (both 2026-11-14).
+passes on one target and dropping the barriers around compute dispatches (both 2026-11-14); preserve_none on lifted code (even, +10% code) and guest cores pinned to physical cores
+(`NX_HOST_CORES`, +14%), both 2026-11-20/21.
 
 ### What a frame looks like (RGP, stand-still)
 
