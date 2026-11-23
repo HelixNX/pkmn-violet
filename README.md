@@ -45,7 +45,7 @@ cd ns-port
 ```
 
 Put your NSPs in `pkmn-violet/rom/`, then follow the workspace README's one-time setup: unpack and dump the game,
-export its functions, lift them to C (~12 min), and build (~25 min the first time; later builds take seconds to
+export its functions, lift them to C (~5-8 min), and build (~25 min the first time; later builds take seconds to
 minutes).
 
 ## Play

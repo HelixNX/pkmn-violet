@@ -63,14 +63,29 @@ Time Trials lesson). V4 graphics. V5 audio, movies, input, saves. V6 playable. A
   single-lane decoding and USRA precedence. Jump tables IDA missed recovered by pattern (`Mod.recover_switches`,
   bounded by AND/UBFX/CMP: 34 sdk, 1 subsdk0, 14 main); BL-target function recovery; fall-through into IDA-split
   functions; weak imports nobody defines get trap stubs (gRPC TLS, `getentropy`); analysis cached in
-  `build/modcache` (keyed on a64lift.py's mtime). `_writes` is exact (base only with writeback, Rt2 only for pairs):
+  `build/modcache` (keyed on a hash of the analysis code since 2026-11-23, before on a64lift.py's mtime). `_writes` is exact (base only with writeback, Rt2 only for pairs):
   a Bink thread once jumped into an unrecovered `adr; ldrb; add lsl #2; br` table because `ldr w19, [x7], #4` counted
   as writing Rt2.
 - Lua's luaD_throw needs setjmp / longjmp: host jump buffer table 256 per thread, returned-frame slots reused first,
   non-stack entries evicted first.
-- Lift: 830 files, 1.0 GB of C; worker processes (NX_LIFT_PROCS, ~3 GB each) cut one step 129 -> 59 s; a re-lift
-  takes ~12 min on the laptop. Build: LIFT_JOBS=0 = min(cores, RAM / 2 GB); full build ~4.4 min on the 16-thread
+- Lift: 919 files, 1.26 GB of C; worker processes (NX_LIFT_PROCS, ~0.6 GB each since 2026-11-23, ~3 GB before); a
+  re-lift took ~12 min on the laptop, 340 s in one process after the 2026-11-23 speed-ups. Build: LIFT_JOBS=0 = min(cores, RAM / 2 GB); full build ~4.4 min on the 16-thread
   desktop, ~20 min on the laptop, 25 min before the parallel compile; exe 407 MB, PDB 304 MB. Tests: `a64test` with `py -3.12` (capstone + unicorn; 43,812 + 35,632 pair cases).
+- **Lifter speed-ups (2026-11-23, laptop; output byte-identical on subsdk0 + sdk, 1 and 4 processes):** profiled,
+  subsdk0 + sdk took 557 s, 408 of them the module analysis (`jump_table` scanned 0x800 + 0x4000 bytes before every
+  unresolved BR: 151 M word reads), and the cache was keyed on a64lift.py's mtime, so every lifter change redid it.
+  Now: (1) the cache key is a hash of the analysis code (`analysis_version`); (2) `_maybe_table` skips a BR whose
+  last definition before it (in jump_table's address-order model) is not `ADD Xd, Xn, Xm{, LSL / UXTW / SXTW}`;
+  (3) word reads from a uint32 view of the text; (4) the cache drops the per-instruction `owner` map (rebuilt on use
+  for a64dis.py), keeps function offsets as `array('I')`, stores the secondary entries: main's cache 207 -> 59 MB,
+  load 0.7 s, a worker ~0.35 GB instead of ~2.6; (5) all modules' chunks go to the pool at once; (6)
+  lift_function finds a function's switches by bisect, not by scanning all. Profiled 557 -> 141 s; analysis of all
+  three modules 86 s (once per analysis change); subsdk0 + sdk in 4 processes 17 s; the full lift 340 s in one
+  process (3 GB free: the old and the first new formula both gave 1). Workers now min(logical cores, (free - 1.5
+  GB) / 0.6 GB). Full lift, the same files every time: 2 processes (2.8 GB free) 195 s, peaks this process 606 MB,
+  workers 430 / 375 MB; 7 processes (6 GB free, reserve then 1 GB) 131 s, workers 365-429 MB, but free memory fell
+  to 0.72 GB, so the reserve went to 1.5 GB. Past ~4 workers the gain flattens (6 physical cores, the main process
+  takes results in order).
 - **`patches.txt`**: "if" alternates switched at run time, "call" / "after" host hooks. **Lifted code is per
   machine: pulling a patches.txt change needs a re-lift; the build doesn't warn** (the weather mod first failed on
   the laptop for that).

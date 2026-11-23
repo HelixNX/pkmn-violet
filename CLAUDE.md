@@ -14,7 +14,7 @@ From the workspace root (`..\start.ps1` wraps `violetrecomp\`'s scripts, which a
 |---|---|
 | Play (builds the exe and mods first; log `build\run.log`) | `.\start.ps1 violet` (`-NoBuild`, `-Log 2`; `-Timeout <s>` for unattended runs only) |
 | Build | `.\start.ps1 build violet` = `..\build.bat violet` = `violetrecomp\build.bat` (first configure ~25 min; keep Release) |
-| Re-lift (after a patches.txt or lifter change; per machine, the build doesn't warn) | from `violetrecomp\`: `py -3.12 ..\..\nxrecomp\tools\lifter\a64lift.py lift ..\build\lifted` (~12 min) |
+| Re-lift (after a patches.txt or lifter change; per machine, the build doesn't warn) | from `violetrecomp\`: `py -3.12 ..\..\nxrecomp\tools\lifter\a64lift.py lift ..\build\lifted` (~6 min in one process on the laptop, less with workers; +1.5 min when the module analysis is redone) |
 | Room (UDP 24872) | `.\start.ps1 room` (`-Name`, `-Password`); `-Beacon` adds ldn-beacon in the same console |
 | Join a room | `.\start.ps1 violet -Room 127.0.0.1:24872 -Nick Host`, or in game: Multiplayer > Rooms |
 | Player package | `.\start.ps1 package violet <dir>` (`-PythonZip`, `-ShaderPack`; `-Mods all` copies the DLLs, not their game-derived data) |
