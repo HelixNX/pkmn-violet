@@ -289,7 +289,11 @@ format lists; attachment-only barriers between passes on one target; dropping ba
 kspin; preserve_none (even, +10% code); guest cores pinned to physical cores (`NX_HOST_CORES=1`, +14%: the runtime's
 and driver's threads share them); answering the fence late at 1x and more cores for the job join (the trace: main
 never waits on the GPU, the joins are the workers' real work); rewriting single hot functions by hand (the profile is
-flat: top function 1.3%); the lighting shader's instruction count (-28% instructions, same time).
+flat: top function 1.3%); the lighting shader's instruction count (-28% instructions, same time); MMCSS "Games" for
+the busiest guest threads (`NX_MMCSS=1`, 2026-11-23, 1x ABBA: off 4.00 / 3.91 ms, on 4.00 / 4.00, 1% lows the same;
+main, 5a-5c, 58, 59 joined). **STL stays SEQ_CST** (not measured, ruled out on correctness): ARM's STLR -> LDAR order
+(C++ seq_cst) needs a full barrier on one side under x86; on the store (21,717 sites) is cheaper than on the load
+(87,689).
 
 ### Open findings
 
@@ -317,15 +321,16 @@ flat: top function 1.3%); the lighting shader's instruction count (-28% instruct
 3. **Uploads / texture creation out of the pass** (TotK vk_texture.c 894-1010): later uploads still end the pass with
    full barriers; deswizzle / ASTC on workers, prefetch at nvnTexturePoolRegisterTexture (the 5-9 ms spikes at 2x).
 4. **Fix the lazy pass-end barriers** (above; ~0.1-0.2 ms at 2x).
-5. The fused-exclusive crash (above), then PGO by default (a profile per lift).
+5. The fused-exclusive crash (above). PGO by default waits until the code is more final (the user, 2026-11-23:
+   every lifter / patches.txt change would want a new profile).
 6. Lifter: inline small leaf callees (9-11% of 634,507 `bl` sites target <= 16-instruction leaves); host CRC32 / TBL /
    PMULL / AES; branch-free vector fmin / fmax / FCVTZS with a NaN guard; dispatch table as 32-bit offsets; giant cold
-   functions at -O0, `/GS-`; STL as release instead of SEQ_CST.
+   functions at -O0, `/GS-`.
 7. GPU: graphics pipeline libraries + fast link (TotK, ssbu) then async shaders by default; a vkCmd* recorder thread
    (only once translation exceeds the GPU frame); UBOs as UNIFORM_BUFFER_DYNAMIC, push descriptor templates; the game's
    resolution controller fed real GPU times; real GPU timestamps for counters.
 8. Kernel / I/O: overlapped RomFS / NCA reads (one synchronous handle serialises every thread; check with
-   NX_FS_TRACE first); NCA AES-NI CTR in place (packages); MMCSS "Games"; release the core only around IPC that can
+   NX_FS_TRACE first); NCA AES-NI CTR in place (packages); release the core only around IPC that can
    block; kernel lists that don't scan every thread ever made.
 9. Overlap CPU and GPU by answering SyncWait a frame late (Z-A): only helps where the guest waits on the GPU (not at
    1x here); large, high risk.
