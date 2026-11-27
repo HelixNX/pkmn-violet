@@ -153,9 +153,17 @@ built from the game**, not even to owners.
 - CPU-written textures: only ranges of uploaded textures are watched (write watch, own thread); containers upload
   guest memory and copy in GPU-written parts; grown or partially written images upload first. GPU-written linear
   textures are copied back at submission end (the profile photo).
-- **Render scale 1-4x** (live, `rescale_all`): 16:9 targets from 120x68 up are made N times larger when first drawn
-  into; a colour target drawn with a scaled depth bound joins (`image_promote`: the menus' 3D player / mons). Box
-  downscale to the window (vk.c `downscale`).
+- **Render scale 1-4x in 120ths** (2026-11-24/25, a 1080p height in 9 px steps; menu: a slider applied when let go,
+  buttons for 1080/1440/1620/1800/2160/2880/4320p; live, `rescale_all`): 16:9 targets from 120x68 up are made
+  `ceil(size * s)` when first drawn into; rectangles (viewport, scissor, clears, copies, the present's crop) map edge x
+  to `ceil(x * s - 0.5)`, the first texel whose centre lies in the game's pixel (gpu_int.h `sc_size` / `sc_edge`).
+  Shaders (translate.py `rs_c2` / `rs_lo`): texel c of a scaled texture is `floor((c + f) * s)`, f the fragment's
+  place inside its game pixel (0.5 outside fragment shaders); sizes `floor(size / s + 0.01)`; compute stores fill
+  every texel whose centre lies in the game's texel. Whole factors give the old mapping (except unscaled passes and
+  compute now read the block's middle, not its corner). 120ths keep 1920 x 1080 on whole pixels; settings.ini `render_scale` as text (1.333), old `2` still read. A colour target drawn with a scaled depth
+  bound joins (`image_promote`: the menus' 3D player / mons). Box downscale to the window (vk.c `downscale`).
+  Overworld, 1x stand-still bench, FSR 2 off (`bench_rs*`): **2x 6.21 ms (161 fps, GPU 5.99) -> 1.33x 4.15 ms
+  (241 fps, GPU 3.87)** for a 1440p window; frame dumps matched (lighting, shadows, skinning, minimap).
 - New images' layout change, zeroing and first upload go into the slot's `pre` command buffer; image budget from
   VK_EXT_memory_budget (90% of the heap's budget less mirrors / staging). Pipelines: built on 2 workers with the draw
   skipped (NX_ASYNC_SHADERS, netplay builds), cache `build/pipelines.bin(s)`, `pipelines.list` prebuilt at start.
@@ -194,8 +202,20 @@ reads through the null). `h_heap_oom` (`main+c28230`, only after a failed alloca
   1080p. Overworld log (`taa: last 600 frames`): every frame resolved, ~750 jittered draws a frame.
 - Menu: Options > Video > Anti-aliasing (Off / FSR 2 native), Sharpening, Jitter (dev); settings.ini `taa`,
   `taa_sharpness`; NX_TAA / NX_TAA_SHARPNESS decide at start when set. UiHost version 4.
-- Open: upscaling presets (Quality 1.5x, Balanced 1.7x, Performance 2x, the user's 1.33x) need a fractional render
-  size plus a negative texture LOD bias; reactive mask. Frame generation dropped (the user, 2026-11-23: camera-only
+- **Upscaling** (2026-11-24/25, `TAA_UPSCALE`; menu: "FSR 2 anti-aliasing", "FSR 2 quality" = Native / Quality 1.5x /
+  Balanced 1.7x / Performance 2x / Ultra performance 3x, "Scene height" slider for any ratio; settings `taa=2`,
+  `taa_ratio` = output / scene; NX_TAA=2, NX_TAA_RATIO): two scales, the output's `rs_scale` and the scene's `rs_in`
+  (120ths, **never below 1x**: presets that would go below show as needing a higher render scale; at 1440p only
+  ratios up to 1.33 work). Below 1x needs shaders told the game's texture sizes: ceil(W * s) is not invertible for
+  s < 1, so TXQ cannot work them out (the laptop's 720p -> 1080p would need it). Colour targets drawn after the frame's resolve are the output's (`Image.post`, set in
+  rt_view while `post_phase`; the resolve's target too): the picture, the HUD, the final copy. Handles of output-scale
+  images carry bit 17 (`HANDLE_OUT`, translate.py: `pc.oscale`; push constants 32 bytes: tscale = rs_in, rscale =
+  the pass's, oscale = rs_scale). The resolve draw itself renders at rs_in into the top-left of the output-sized
+  picture (`taa_resolve_pass` lowers the pass's scale for that draw); FSR 2 reads that corner (colour resource at its
+  real size) and writes the full size back; a frame FSR 2 skips gets the corner stretched (`upscale_plain`). Bench
+  1440p from 1080p: **3.92-3.96 ms (253 fps, GPU 3.52 with FSR 2)** vs native 1.33x without AA 4.15; HUD and minimap
+  crisp. Post images seen: `@12fad3a000` (final copy), `@12fb5aa000`, `@12ee1cc600`. Not done: a negative texture LOD
+  bias while upscaling (log2(render / output)), the reactive mask; presets below 1x scene. Frame generation dropped (the user, 2026-11-23: camera-only
   motion vectors would ghost moving creatures).
 
 ### Open rendering issues
@@ -208,7 +228,12 @@ reads through the null). `h_heap_oom` (`main+c28230`, only after a failed alloca
   sky blue; thunderstorm's 8 tall quads (vs `7a1f81cac22350a1` fs `df61a3468379ebd4`) pass 0 samples even with depth
   test off. Ruled out: skipped draws, particle clocks, the depth copy. Lead: the half-res depth test (ds
   `@12f541a000`, written by `d4ea93c14e5c47f0`). Test natural rain after the prologue.
-- The spinning Poké Ball sign above Pokémon Centers ghosts at its edges (2x; compare at 1x, then F12).
+- **The player selfie (profile photo) looks too bright, gamma-like** (the user, 2026-11-24). Its path: `main+187bf80`
+  UpdateCapture renders a pitch-linear 1920x1080 RGBA8 target, we copy it back to guest memory
+  (`linear_writeback`), the CPU BC1-encodes it. Suspect an sRGB / UNORM mismatch: the target drawn through an sRGB
+  view (or blended in linear) and read back as plain UNORM, or the reverse. Not looked at.
+- The spinning Poké Ball sign above Pokémon Centers ghosting at its edges (2x, 2026-11-13): probably one of the
+  lighting fixes since (the user, 2026-11-24); dropped unless seen again.
 - Unconfirmed whether still there: the Let's Go glow too bright; huge glows from `?` / `!` markers; the "…" bubble
   shows only grey corners (draws `de9e66ba…` / `f3fbc253…`); cyan-white streaks in Mesagoza. Validation still reports:
   shadow pass R8_UINT target sampled as float, A2C without alpha output, integer attributes into float inputs, a
@@ -231,7 +256,24 @@ reads through the null). `h_heap_oom` (`main+c28230`, only after a failed alloca
 
 ## Performance
 
-### Where things stand (2026-11-23)
+### Where things stand (2026-11-25)
+
+- **1440p, FSR 2 upscaling from 1080p (the user's setup): ~4.1 ms (245 fps), GPU 3.6-3.7 ms busy, CPU alone
+  ~3.65**: balanced. FSR 2 itself 0.56 ms of GPU (`taa: FSR 2` in NX_GPU_PROF; auto-exposure costs nothing:
+  `NX_FSR2_AUTOEXP=0` 0.562 vs 0.560). NX_TRACE (`trace_up`, frames 15000-15030): GPU busy 3.92 of 4.30 ms, the
+  render thread waits 0.45 ms a frame for it; main runs 2.9, blocked 1.26 (job join condvar `sdk+37fa4c` 0.83, mutex
+  0.41); workers 5a / 5b run ~2.3, blocked 1.8 each.
+- **CPU ideas measured 2026-11-25, none moved the CPU-only frame** (ABBA, NX_GPU_SKIP=1, ~3.65 ms): ThinLTO of lifted
+  code (`NX_LTO=thin`, ~1%), leaf inlining in the lifter (`NX_INLINE_MAX=8`: 19,958 BL sites, 4.7% of main's; 3.69 vs
+  3.65), a lazier Lua collector (`NX_LUA_HEAP=1`, below). The CPU frame is a chain of hand-offs between main and the
+  workers, not per-call cost or main's own work. Main's BL sites by callee (`leaf_survey`): >16 instructions 84.7%,
+  straight <= 8 4.7%, calling others 4.6%, ending in a jump 3.3%, straight 9-16 1.0%, branching <= 16 1.6%.
+- Left, a few % each: FSR 2 in FP16 (RDNA packed math; needs FP16 permutations and shaderFloat16), the barriers.
+
+- **1440p window, desktop:** 1.33x 4.15 ms (GPU 3.87), FSR 2 upscaling from 1080p 3.92 ms; **CPU-only
+  (`NX_GPU_SKIP=1`) 3.68 ms**: the CPU is the limit now. GPU at 1.33x (`bench_p133pass`): G-buffer 0.93 ms,
+  lighting + transparents 0.78 (lighting triangle 0.49), 2K shadows 0.35, outside passes 0.31 (107 a frame), depth-only
+  0.22, skinning 0.17; ~96 pass-end barriers a frame. Older numbers below are for 1x / 2x.
 
 - **Desktop (RX 7800 XT + 7800X3D), 1x:** CPU-bound. At the old bench spot ~4.3 ms (230 fps) after the lifter work
   (was 5.0); the bench save moved 2026-11-21 and the new spot runs ~2.0 ms, so compare within a day only. **The frame
@@ -244,7 +286,19 @@ reads through the null). `h_heap_oom` (`main+c28230`, only after a failed alloca
 - **GTX 1650 Ti laptop:** ~11-12 ms (85-90 fps), GPU-bound; pool mirrors in VRAM there (`NX_POOL_MIRROR`; they lose on
   AMD, which runs with them off).
 - Long sessions: the game's own full Lua collections (50-70 ms every 4-12 s) answer **failed allocations**
-  (`main+eb071c`: collect, retry `eb0890`, abort if it still fails); which heap fills is open.
+  (`main+eb071c`: collect, retry `eb0890`, abort if it still fails). **Likely heap (2026-11-25): the Haxe glue code's
+  MemoryManager, 8 MB** (`sub_11AD688`: "gfl::lua::ResourceId::GlueCode"; `main+c97840` allocates, asks for a full
+  collection on failure, "GlueCode MemoryManager Allocate failed" abort if that does not help). Its native blocks go
+  only when the Lua objects owning them are collected. Not yet checked in a long session: glue 64 MB at the normal
+  pace (patches.txt `if luaheap` lines 11ad694 / 11ad6b0 / 11ad6cc).
+- **Lua heap layout** (2026-11-25, lua.c logs it once): VM allocator `main+2aae154` (global_State +0, ud +8): blocks
+  <= 512 bytes from ud[11], an arena of 60% of the Trinity Lua heap (62.4 MB of 104), larger from ud[12] (38%, 39.6
+  MB), ud[13] (the Trinity heap manager) when those fail. The ~70 MB "limit" is the small-object arena.
+  **Tried: a roomier collector** (`NX_LUA_HEAP=1`: Lua heap 104 -> 256 MB at `main+146e6d0`, glue 8 -> 64 MB, reported
+  memory +256 MB; `NX_LUA_PAUSE`): pause 200 alone aborts the load (the 8 MB glue heap fills before objects are
+  collected); with all three it loads, steps 0.234 -> 0.010 ms, but **the frame is unchanged** (3.658 vs 3.656 ms
+  CPU-only: main waits on the job workers, not on its own GC work) and the heap reaches ~141 MB of the 154 MB arena,
+  where Lua runs emergency full collections (11.6 ms). Off by default.
 
 ### How to measure
 
@@ -314,8 +368,9 @@ main, 5a-5c, 58, 59 joined). **STL stays SEQ_CST** (not measured, ruled out on c
 
 ### Next, ranked (estimates unless noted)
 
-1. **Fractional render scale** (Z-A output_scale.c: a float scale in push constants): 2x renders 2.25x a 1440p
-   window's pixels; also what FSR 2 upscaling presets need.
+1. Done 2026-11-24: fractional render scale, FSR 2 upscaling (Graphics). **Next: lifted-code speed** (the CPU limits
+   at 1440p): ThinLTO of lifted code (`NX_LTO=thin`, nxrecomp.cmake: cross-file inlining of small callees), then
+   inlining in the lifter; then barriers.
 2. **XFB skinning into a device-local mirror** (Z-A exec.c 5851-5960; 3 ms on a 1660 Super): skinned vertices go
    over PCIe on the laptop. Needs "GPU-written" stamps so `mirror_sync` doesn't clobber, and a copy-back.
 3. **Uploads / texture creation out of the pass** (TotK vk_texture.c 894-1010): later uploads still end the pass with
@@ -430,7 +485,7 @@ main, 5a-5c, 58, 59 joined). **STL stays SEQ_CST** (not measured, ruled out on c
   den rolls its star target, then walks the entries (skip other game, other group, difficulty out of range), sums
   rates, NextInt(sum): PKHeX's dist behaviour. Rewards look in romfs tables first, then delivered ones. **No entry
   cap** found (no verifier; only the 30,000-byte size).
-- **Events mod (F4, built, not run yet):** delivers live through raidgem.c (`violet_raid_delivery`,
+- **Events mod (F4, user-checked 2026-11-23):** delivers live through raidgem.c (`violet_raid_delivery`,
   `violet_raid_deliver`); `mods/common/delivery.h` is a small FlatBuffers writer sharing vtables and equal sub-tables
   (all 230 PKHeX raids fit one delivery). Dates: `mods/events/event_dates.csv` (Serebii, 214 of 230 dated). Game clock
   from `<cache dir>\clock.txt`. Entries: the mon from PKHeX, the rest from the first normal raid template of its star
@@ -465,21 +520,23 @@ main, 5a-5c, 58, 59 joined). **STL stays SEQ_CST** (not measured, ruled out on c
   `C2B428A63695FD2C7.S988D7D0A4EEF693D`, called by the wild manager `C4EE52E49562F8277`); F8 wraps it (user-checked:
   Hisuian Arcanine in Paldea). Rewriting the encounter tables in memory changes nothing (read at save load).
   `violetrecomp/wild.c`: `after wild_create` at debf88 rewrites the spec (shiny, IVs, EVs, nature, ability, gender,
-  level), `after wild_created` at debff8 sets moves and Tera; `NX_WILD_LOG=1`. All spawns shiny (`violet_all_shiny`).
+  level), `after wild_created` at debff8 sets moves and Tera; `NX_WILD_LOG=1`. All spawns shiny (`violet_all_shiny`)
+  and "Spawn on me" user-checked 2026-11-23.
 - "Around you": wild manager W = `C4EE52E49562F8277.SF3075AB31C9E8AF4`, state W[17]; "Spawn on me" moves a spawn
   point to the player; encounter table W[26] (`F2F6C7BBE115AFBCB` fills, `FCEEA7F4134055567` picks; restore W[26]
   after wrapping). Union Circle: only on the simulating instance (untested).
-- **No contact battles:** `main+1d0e5d4(component, enable)` zeroed by `h_encount_enable` (main+1d0e5e4). Unconfirmed;
-  fallback event flag `FEVT_COMMON_0140_NO_ENCOUNT`.
+- **No contact battles** (user-checked 2026-11-23): `main+1d0e5d4(component, enable)` zeroed by `h_encount_enable`
+  (main+1d0e5e4).
 - Version exclusives (4.0.0): of 955 table entries 889 both, 33 Scarlet-only, 33 Violet-only (versiontable field 28).
   Spawn-pool rules (wanted: exclusives in both, any time, equal weights, density): wrap the Lua filter
   (`F67A9C2A9373A0AC6`); density from `encounterCountMax` / `encounterCheckInterval` (loader main+1513f24).
 
-### F9 / F10: weather (built, not tried in game)
+### F9 / F10: weather (user-checked 2026-11-23)
 
 `mods/weather/weather.cpp`: F9 rain, F10 any type. Lua class `CA71F0CDF966F3175`: set `A3EC462E45551FD6(type)`, reset
 `ECAF51D6E7046362()`, span `8614855A6EF844D8(s)`. **Type numbers guessed** (1 normal .. 9 heavy fog, AreaWeather9
-order); real ones in 1d56928 (ConditionCurrentWeather).
+order; the user's check found it working, numbers not confirmed one by one); real ones in 1d56928
+(ConditionCurrentWeather).
 
 ### Save edits (svedit)
 

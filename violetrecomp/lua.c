@@ -181,18 +181,32 @@ void h_gc_fullgc(Ctx *c) {
  * In the field that was one every 4-12 s, each 50-70 ms of main holding its core (a 57 MB heap marked in one go).
  * They are the game's answer to a failed allocation (see h_gc_request) and stay full collections. NX_LUA_GC=3
  * (crashes, kept for experiments) only hurries the paced collector instead: the steps grow to GC_HURRY_KB a frame
- * until two cycles have ended */
+ * until two cycles have ended.
+ *
+ * The Lua heap (patches.txt `if luaheap`, main+146e6d0: the Switch setup's 104 MB Trinity heap -> 256 MB;
+ * NX_LUA_HEAP=1; OFF: 2026-11-25 it made the load abort, with failed allocations answered by full collections at a
+ * 56 MB Lua heap: the VM's allocator is not that heap, and the bigger one took room from it). Meant: with room, the collector rests between cycles (pause GC_PAUSE_ROOMY, 200: a cycle
+ * starts once the heap has doubled since the last one ended) instead of cycling back to back (pause 100, the heap
+ * near its ~70 MB limit): far less marking and sweeping a second, and no failed allocation to answer with a full
+ * collection. NX_LUA_PAUSE overrides the pause. */
 #define LUA_GC (MAIN + 0xc8c520)                /* lua_gc(L, what, ...) */
 #define GC_COLLECT 2
 #define GC_STEP 5
 #define GC_INC 11
 #define GC_HURRY_KB 200                         /* ~2 ms a step (0.01 ms a KB measured) */
 #define GCS_PAUSE 8                             /* gcstate between cycles */
+#define GC_PAUSE_ROOMY 200
 static int gc_mode = 1;
+volatile u8 nx_flag_luaheap = 0;               /* patches.txt "if luaheap": off, it broke loading (below) */
+static int gc_pause = GC_PAUSE_ROOMY;
 
 __attribute__((constructor)) static void gc_init(void) {
     const char *e = getenv("NX_LUA_GC");
     if (e) gc_mode = atoi(e);
+    if ((e = getenv("NX_LUA_HEAP"))) nx_flag_luaheap = *e == '1';
+    if (nx_flag_luaheap) nx_total_memory += 0x10000000;    /* the 152 MB more, reported as the console's too */
+    gc_pause = nx_flag_luaheap ? GC_PAUSE_ROOMY : 100;
+    if ((e = getenv("NX_LUA_PAUSE"))) gc_pause = atoi(e);
 }
 
 static double gc_heap(const u8 *g) { return (double)(*(s64 *)(g + 0x10) + *(s64 *)(g + 0x18)) / 1048576; }
@@ -220,7 +234,55 @@ void h_gc_step(Ctx *c) {
     int k = 0;
     while (k < 3 && gc_stat[k].g && gc_stat[k].g != g) k++;
     GcStat *st = &gc_stat[k];
-    if (st->g != g) { memset(st, 0, sizeof *st); st->g = g; st->since = gc_ms(); }
+    if (st->g != g) {
+        memset(st, 0, sizeof *st);
+        st->g = g;
+        st->since = gc_ms();
+        hlog(0, "lua: collector %p: allocator %llx (main+%llx), its data %llx", (void *)g, *(u64 *)g, *(u64 *)g - MAIN,
+             *(u64 *)(g + 8));
+        /* the Haxe glue code's MemoryManager (main+c97840: [[[main+46d3920]] + 8], vtable +16 allocates; "GlueCode
+         * MemoryManager Allocate failed" when a full collection does not make room): its heap's sizes */
+        {
+            u64 var = *(u64 *)(uintptr_t)(MAIN + 0x46d3920), mm = var ? *(u64 *)(uintptr_t)var : 0;
+            const u64 *gh = mm ? (const u64 *)(uintptr_t)*(u64 *)(uintptr_t)(mm + 8) : NULL;
+            if (gh) {
+                char line[600];
+                int n = snprintf(line, sizeof line, "lua:   glue heap %llx vtable main+%llx:", (u64)(uintptr_t)gh, gh[0] - MAIN);
+                for (int i = 1; i < 120 && n < (int)sizeof line - 40; i++)
+                    if (gh[i] >= (1u << 16) && gh[i] <= (1ull << 30) && !(gh[i] & 0xfff))
+                        n += snprintf(line + n, sizeof line - n, " +%x=%llu KB", i * 8, gh[i] >> 10);
+                hlog(0, "%s", line);
+                hlog(0, "lua:     words %llx %llx %llx %llx %llx %llx %llx %llx", gh[0], gh[1], gh[2], gh[3], gh[4],
+                     gh[5], gh[6], gh[7]);
+            }
+        }
+        /* the allocator (main+2aae154) takes small blocks (<= 512 bytes) from ud[11], larger from ud[12], ud[13] when
+         * those fail: each heap's vtable and the words that look like sizes (1 MB - 1 GB, whole 64 KB) */
+        const u64 *ud = (const u64 *)(uintptr_t)*(u64 *)(g + 8);
+        for (int k = 11; k <= 13; k++) {
+            const u64 *hp = (const u64 *)(uintptr_t)ud[k];
+            if (!hp) continue;
+            char line[600];
+            int n = snprintf(line, sizeof line, "lua:   ud[%d] heap %llx vtable main+%llx:", k, ud[k], hp[0] - MAIN);
+            for (int i = 1; i < 80 && n < (int)sizeof line - 40; i++)
+                if (hp[i] >= (1u << 20) && hp[i] <= (1ull << 30) && !(hp[i] & 0xffff))
+                    n += snprintf(line + n, sizeof line - n, " +%x=%lluMB", i * 8, hp[i] >> 20);
+            hlog(0, "%s", line);
+            if (k < 13) {                       /* the wrappers: their first words, and sizes in what they point at */
+                hlog(0, "lua:     words %llx %llx %llx %llx %llx %llx %llx %llx", hp[0], hp[1], hp[2], hp[3], hp[4], hp[5],
+                     hp[6], hp[7]);
+                for (int w = 1; w < 8; w++) {
+                    const u64 *q = (const u64 *)(uintptr_t)hp[w];
+                    if (hp[w] < 0x1000000000ull || hp[w] > 0x7200000000ull || (hp[w] & 7)) continue;
+                    n = snprintf(line, sizeof line, "lua:     [%d] -> %llx vtable %llx:", w, hp[w], q[0]);
+                    for (int i = 1; i < 120 && n < (int)sizeof line - 40; i++)
+                        if (q[i] >= (1u << 20) && q[i] <= (1ull << 30) && !(q[i] & 0xffff))
+                            n += snprintf(line + n, sizeof line - n, " +%x=%lluMB", i * 8, q[i] >> 20);
+                    hlog(0, "%s", line);
+                }
+            }
+        }
+    }
     static u8 seen[4] = {9, 9, 9, 9};
     if (seen[k] != g[0x66]) {
         hlog(1, "lua: collector %p: kind %u at the game's step (was %u), step data %llu, state %u, heap %.1f MB",
@@ -231,9 +293,9 @@ void h_gc_step(Ctx *c) {
         /* generational as Lua declares it: that kind, or incremental after a major collection that freed too
          * little (lastatomic, +28), where every step is a whole mark until one frees enough */
         if (g[0x66] == 1 || *(u64 *)(g + 0x28)) {
-            hlog(1, "lua: collector %p set to incremental (was kind %u, last atomic %llu, heap %.1f MB)", (void *)g,
-                 g[0x66], *(u64 *)(g + 0x28), gc_heap(g));
-            gcall(c, LUA_GC, L, GC_INC, 100, 12, 0, 0);
+            hlog(1, "lua: collector %p set to incremental, pause %d (was kind %u, last atomic %llu, heap %.1f MB)",
+                 (void *)g, gc_pause, g[0x66], *(u64 *)(g + 0x28), gc_heap(g));
+            gcall(c, LUA_GC, L, GC_INC, (u64)gc_pause, 12, 0, 0);
         }
         c->x[2] = gc_hurry[k] > 0 ? GC_HURRY_KB : 1;
     }

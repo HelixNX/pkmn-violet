@@ -57,12 +57,12 @@ it) starts the game's clock there at every start, until deleted.
   near the camera (NOTES "Open rendering issues").
 - Local play over rooms between instances (Union Circle, Tera raids) and with a **real Switch** through
   `../ldn-beacon` (raids, link trades). Joining from the menu after an offline start works.
-- Event raids: a friend's delivery (7-star Rillaboom) shows as an event crystal. The events mod (F4) is built, **not
-  run yet**.
+- Event raids: a friend's delivery (7-star Rillaboom) shows as an event crystal; the events mod (F4) delivers past
+  events (user-checked 2026-11-23).
 - Packaged builds read the game from the player's own NSPs and keys (`NX_PACKAGE`, `violetrecomp_pkg`).
-- Mods user-checked: F6, F7, F8 box writer and wild species swap. **Not tried in game yet:** F8 eggs, Trainers tab,
-  random gender, mod settings over a restart, "Spawn on me", row spawn, held items, no-battles, all-shiny, the rest of
-  the wild spec; the weather mod.
+- Mods user-checked: F4 events, F6 raids, F7 items, F8 (box writer, wild spec, "Spawn on me", no contact battles,
+  all spawns shiny), F9 / F10 weather (2026-11-23). Not confirmed one by one: F8 eggs hatched / traded, Trainers tab,
+  random gender, mod settings over a restart, row spawn, held items.
 
 ## Open (the user's list, in order)
 
@@ -71,19 +71,19 @@ it) starts the game's clock there at every start, until deleted.
    the room server on the ESP32.
 1. **F8 eggs:** make one, hatch it; trade one to the Switch (shiny for that trainer) and check it with PKHeX. NOTES
    "F8".
-2. **Event raids:** try the events mod (F4): deliver the 3-star Eevee spotlight, look for event crystals after the
-   reroll, find a seed in F6, catch it, `svedit check` the mon; check the guesses in NOTES "Event raids". Then
-   outbreaks (open: zoneid / pokeN, the struct in memory); real battle settings and rewards need real BCAT files
+2. **Event raids:** F4 works (2026-11-23). Left: `svedit check` a caught event mon; the guesses in NOTES "Event
+   raids" (event dens per reroll, group 1, fixed IVs). Then outbreaks (open: zoneid / pokeN, the struct in memory); real battle settings and rewards need real BCAT files
    (a download: the user picks the archive, ask first). Catch the Rillaboom on the Switch with its clock in the
    event window.
 3. Spawn-pool rules (version exclusives in both, time of day, weights, density). NOTES "F8".
 4. Raid crystals after F6 writes: do they show again (`raidgem:` lines)?
 5. Missing letters (capture `build/frames/frame_23259*`) and rain. NOTES "Open rendering issues".
-6. **Performance** (target: a steady 120 fps at 2x). NOTES "Performance": "Where things stand", "Next, ranked". Next
-   (the user, 2026-11-21: "1-3 for now, revisit 4"): a fractional render scale and FSR 2 upscaling presets (the
-   user: 1.33x), XFB skinning into a device-local mirror, uploads out of the render pass; later the lazy pass-end
-   barriers and the fused-exclusive crash (main+b5ab44, the user: later). Frame generation dropped (2026-11-23).
-   Long sessions: the game's full Lua collections answer failed allocations (which heap fills: open).
+6. **Performance** (target: a steady 120 fps at 2x, met). NOTES "Performance": "Where things stand", "Next, ranked".
+   2026-11-24/25: fractional render scale (slider, 9 px steps) and FSR 2 upscaling with quality presets (scene >= 1080p):
+   1440p 161 -> ~245 fps with AA; the frame is now balanced between GPU and CPU. CPU tries without gain (ThinLTO, leaf
+   inlining, a lazier Lua collector) are in, off. Left (a few % each): FSR 2 in FP16, the lazy pass-end barriers, the
+   fused-exclusive crash (main+b5ab44, the user: later), scenes below 1080p for the presets (laptop), the long-session
+   hitches (likely the 8 MB glue-code heap). PGO by default waits for more final code.
 7. Older GPUs (RX 580 / GCN): fallbacks built 2026-11-12; next an RX 580 tester's run (`nxrecomp/docs/GPUS.md`).
 8. Long term (the user: "eventually an MMO"): online through our own server answering the NPLN gRPC calls (TLS and
    account hooked in our runtime; DNS alone can't). Until then "Connect to the Internet" shows a notice (nifm.c).
